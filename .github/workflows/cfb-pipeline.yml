@@ -1,0 +1,56 @@
+name: CFB pipeline (sync odds + settle bets)
+
+on:
+  schedule:
+    # GitHub cron is UTC. Both lines are restricted to the football season
+    # (August–January) so nothing runs Feb–Jul.
+    #
+    # Every 6 hours through the week — keeps lines and rankings fresh.
+    - cron: "10 */6 * 8-12,1 *"
+    # Hourly Fri/Sat/Sun — game days, so results settle within the hour.
+    - cron: "25 * * 8-12,1 5,6,0"
+    #
+    # ~2,200 runs/season. Free and unlimited on a public repo; on a private
+    # repo that is ~2,200–3,300 billed minutes per season. Delete the second
+    # line to cut it to ~600 runs/season.
+  workflow_dispatch:
+    inputs:
+      dry_run:
+        description: "Grade bets without writing"
+        type: boolean
+        default: false
+
+concurrency:
+  group: cfb-pipeline
+  cancel-in-progress: false
+
+jobs:
+  pipeline:
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    env:
+      DATABASE_URL: ${{ secrets.DATABASE_URL }}
+      CFBD_API_KEY: ${{ secrets.CFBD_API_KEY }}
+      LOG_LEVEL: INFO
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+          cache: pip
+
+      - name: Install dependencies
+        run: pip install -r requirements-pipeline.txt
+
+      - name: Sync games, lines and rankings
+        run: python cfb_sync.py
+
+      - name: Settle completed bets
+        run: |
+          if [ "${{ inputs.dry_run }}" = "true" ]; then
+            python settle_bets.py --dry-run
+          else
+            python settle_bets.py
+          fi

@@ -1,0 +1,6 @@
+streamlit>=1.49,<2
+SQLAlchemy>=2.0,<3
+psycopg2-binary>=2.9.9,<3
+requests>=2.31,<3
+pandas>=2.0,<3
+tzdata>=2024.1

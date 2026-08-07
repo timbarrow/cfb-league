@@ -1,0 +1,4 @@
+# Slim dependency set for the GitHub Actions cron job (no Streamlit/pandas).
+SQLAlchemy>=2.0,<3
+psycopg2-binary>=2.9.9,<3
+requests>=2.31,<3
