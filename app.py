@@ -12,6 +12,7 @@ from __future__ import annotations
 
 from datetime import datetime, timezone
 from decimal import ROUND_HALF_UP, Decimal
+from html import escape
 
 import pandas as pd
 import streamlit as st
@@ -43,7 +44,7 @@ DEFAULT_MULTIPLIER = Decimal("1.91")  # -110
 # Page config + mobile-first CSS
 # =====================================================================
 st.set_page_config(
-    page_title="CFB League",
+    page_title="Fourth Down | CFB League",
     page_icon="🏈",
     layout="centered",           # narrower default = better on phones
     initial_sidebar_state="collapsed",
@@ -52,59 +53,198 @@ st.set_page_config(
 st.markdown(
     """
 <style>
-/* ---- Layout: tight gutters, room for thumbs at the bottom ---- */
-.block-container { padding: 0.6rem 0.7rem 5rem !important; max-width: 780px; }
+@import url('https://fonts.googleapis.com/css2?family=Barlow+Condensed:wght@600;700;800&family=IBM+Plex+Mono:wght@500;600&family=Manrope:wght@400;500;600;700&display=swap');
+
+:root {
+    --ink: #07110e;
+    --panel: #0c1b16;
+    --panel-2: #11261e;
+    --line: rgba(221, 239, 229, .14);
+    --chalk: #f4f2e8;
+    --muted: #9db1a9;
+    --field: #27d17f;
+    --field-dark: #0d6b45;
+    --signal: #ffb547;
+    --danger: #ff6b5f;
+}
+
+html { scroll-behavior: smooth; }
+body, [class*="css"] { font-family: "Manrope", sans-serif; }
+[data-testid="stAppViewContainer"] {
+    color: var(--chalk);
+    background:
+        radial-gradient(circle at 78% -12%, rgba(39, 209, 127, .19), transparent 34rem),
+        radial-gradient(circle at -10% 32%, rgba(255, 181, 71, .08), transparent 26rem),
+        var(--ink);
+}
+[data-testid="stHeader"] { background: transparent; }
+.block-container { padding: 1rem 1.25rem 5rem !important; max-width: 1100px; }
 #MainMenu, footer { visibility: hidden; }
 
-/* ---- Touch targets: 44px minimum (Apple HIG / WCAG 2.5.5) ---- */
-.stButton > button,
-.stFormSubmitButton > button,
-div[data-baseweb="select"] > div { min-height: 44px; }
+h1, h2, h3, h4, .matchup, .display-type {
+    font-family: "Barlow Condensed", sans-serif !important;
+    letter-spacing: -.025em;
+}
+p, label, [data-testid="stCaptionContainer"] { color: var(--muted); }
+
+/* Brand / hero */
+.brand-lockup { display:flex; align-items:center; gap:.75rem; }
+.brand-mark {
+    display:grid; place-items:center; width:42px; height:42px; border-radius:11px;
+    background:var(--field); color:var(--ink); font:800 1.35rem "Barlow Condensed";
+    box-shadow:0 0 28px rgba(39,209,127,.22); transform:rotate(-3deg);
+}
+.brand-name { color:var(--chalk); font:800 1.3rem/1 "Barlow Condensed"; text-transform:uppercase; letter-spacing:.03em; }
+.brand-sub { color:var(--muted); font:500 .62rem/1.5 "IBM Plex Mono"; letter-spacing:.12em; text-transform:uppercase; }
+.auth-hero {
+    position:relative; overflow:hidden; margin:.75rem 0 1.25rem; min-height:330px;
+    padding:clamp(2rem,7vw,4.6rem); border:1px solid var(--line); border-radius:24px;
+    background:
+      linear-gradient(90deg, rgba(7,17,14,.98) 0%, rgba(7,17,14,.84) 52%, rgba(7,17,14,.22) 100%),
+      repeating-linear-gradient(90deg, transparent 0 9.7%, rgba(244,242,232,.07) 9.7% 10%),
+      linear-gradient(135deg, #126943, #0a3728);
+    box-shadow:0 28px 80px rgba(0,0,0,.28);
+}
+.auth-hero:after {
+    content:"50"; position:absolute; right:2%; bottom:-26%; color:rgba(244,242,232,.08);
+    font:800 17rem/1 "Barlow Condensed"; letter-spacing:-.1em;
+}
+.eyebrow { color:var(--field); font:600 .7rem "IBM Plex Mono"; letter-spacing:.16em; text-transform:uppercase; }
+.auth-title { max-width:650px; margin:.85rem 0 1rem; color:var(--chalk); font:800 clamp(3.35rem,10vw,6.8rem)/.78 "Barlow Condensed"; text-transform:uppercase; letter-spacing:-.045em; }
+.auth-copy { max-width:500px; color:#bfd0c9; font-size:1rem; line-height:1.65; }
+.hero-proof { display:flex; flex-wrap:wrap; gap:.6rem 1.4rem; margin-top:2rem; color:var(--chalk); font:600 .69rem "IBM Plex Mono"; text-transform:uppercase; letter-spacing:.08em; }
+.hero-proof span:before { content:""; display:inline-block; width:7px; height:7px; margin-right:.5rem; border-radius:50%; background:var(--signal); }
+div[data-testid="stMainBlockContainer"]:has(.auth-hero) { max-width:900px; }
+
+/* Controls */
+input, textarea, select { font-size:16px !important; }
+[data-baseweb="input"] > div, [data-baseweb="base-input"], [data-baseweb="select"] > div {
+    min-height:48px; border-color:var(--line) !important; background:#0a1713 !important; border-radius:10px !important;
+}
 .stButton > button, .stFormSubmitButton > button {
-    border-radius: 10px; font-weight: 600; width: 100%;
+    min-height:48px; width:100%; border-radius:10px; border:1px solid var(--line);
+    font:700 .76rem "IBM Plex Mono"; letter-spacing:.05em; text-transform:uppercase;
+    transition:transform .18s ease, border-color .18s ease, box-shadow .18s ease;
 }
+.stButton > button:hover, .stFormSubmitButton > button:hover { transform:translateY(-1px); border-color:var(--field); }
+.stButton > button[kind^="primary"], .stFormSubmitButton > button[kind^="primary"] {
+    background:var(--field); color:var(--ink); border-color:var(--field); box-shadow:0 10px 26px rgba(39,209,127,.15);
+}
+.stButton > button[kind^="primary"] p, .stFormSubmitButton > button[kind^="primary"] p { color:var(--ink) !important; }
+.stButton > button:focus-visible, .stFormSubmitButton > button:focus-visible { outline:3px solid var(--signal); outline-offset:3px; }
 
-/* 16px inputs stop iOS Safari auto-zooming on focus */
-input, textarea, select { font-size: 16px !important; }
+/* Navigation */
+.stTabs [data-baseweb="tab-list"] {
+    gap:4px; padding:5px; overflow-x:auto; border:1px solid var(--line); border-radius:14px;
+    background:rgba(12,27,22,.82); backdrop-filter:blur(16px);
+}
+.stTabs [data-baseweb="tab"] {
+    flex:1 0 auto; min-height:46px; padding:0 18px; border-radius:9px;
+    color:var(--muted); font:700 .74rem "IBM Plex Mono"; letter-spacing:.03em; text-transform:uppercase;
+}
+.stTabs [aria-selected="true"] { color:var(--ink) !important; background:var(--chalk) !important; }
+.stTabs [aria-selected="true"] p { color:var(--ink) !important; }
+.stTabs [data-baseweb="tab-highlight"], .stTabs [data-baseweb="tab-border"] { display:none; }
 
-/* ---- Radios as chunky, tappable rows ---- */
+/* Dashboard grammar */
+.topbar { padding:.3rem 0 .95rem; }
+.user-chip { text-align:right; }
+.user-chip strong { display:block; color:var(--chalk); font:700 1.25rem "Barlow Condensed"; }
+.user-chip span { color:var(--field); font:600 .68rem "IBM Plex Mono"; letter-spacing:.06em; text-transform:uppercase; }
+.board-hero { display:flex; justify-content:space-between; align-items:flex-end; gap:1rem; margin:2rem 0 1rem; }
+.board-title { margin:0; color:var(--chalk); font:800 clamp(2.5rem,7vw,4.8rem)/.88 "Barlow Condensed"; text-transform:uppercase; }
+.board-count { color:var(--signal); font:600 .68rem "IBM Plex Mono"; letter-spacing:.09em; text-transform:uppercase; }
+.process-rail { display:grid; grid-template-columns:repeat(3,1fr); margin:0 0 1.2rem; border:1px solid var(--line); border-radius:12px; overflow:hidden; }
+.process-step { padding:.8rem 1rem; color:var(--muted); background:rgba(12,27,22,.62); font:600 .66rem "IBM Plex Mono"; letter-spacing:.07em; text-transform:uppercase; }
+.process-step + .process-step { border-left:1px solid var(--line); }
+.process-step b { color:var(--field); margin-right:.45rem; }
+.board-summary { margin:.85rem 0 1.2rem; color:var(--muted); font:500 .72rem "IBM Plex Mono"; }
+
+div[data-testid="stExpander"] { border:1px solid var(--line) !important; border-radius:12px !important; background:rgba(12,27,22,.58); }
+div[data-testid="stExpander"] summary { min-height:48px; font:700 .73rem "IBM Plex Mono"; letter-spacing:.03em; text-transform:uppercase; }
+div[data-testid="stVerticalBlockBorderWrapper"] {
+    margin-bottom:.35rem; border:1px solid var(--line) !important; border-radius:16px !important;
+    background:linear-gradient(145deg, rgba(17,38,30,.96), rgba(10,24,19,.96));
+    box-shadow:0 14px 34px rgba(0,0,0,.16); transition:border-color .2s ease, transform .2s ease;
+}
+div[data-testid="stVerticalBlockBorderWrapper"]:hover { border-color:rgba(39,209,127,.42) !important; transform:translateY(-1px); }
+.game-kicker { display:flex; justify-content:space-between; gap:1rem; margin-bottom:.45rem; color:var(--muted); font:500 .64rem "IBM Plex Mono"; letter-spacing:.06em; text-transform:uppercase; }
+.game-number { color:var(--signal); }
+.matchup { color:var(--chalk); font-size:clamp(1.45rem,4vw,2rem); font-weight:700; line-height:1.08; }
+.versus { color:var(--muted); padding:0 .3rem; font-size:.75em; }
+.meta { color:var(--muted); font:500 .7rem/1.55 "IBM Plex Mono"; margin-top:.38rem; }
+.rank-badge { display:inline-grid; place-items:center; min-width:24px; height:20px; margin-right:5px; padding:0 5px; border:1px solid rgba(255,181,71,.5); border-radius:5px; color:var(--signal); font:600 .62rem "IBM Plex Mono"; vertical-align:middle; }
+.pill { display:inline-block; margin:.35rem .28rem 0 0; padding:3px 8px; border:1px solid var(--line); border-radius:999px; color:#b5c7c0; font:500 .58rem "IBM Plex Mono"; letter-spacing:.04em; text-transform:uppercase; }
+
+div[role="radiogroup"] { gap:7px; }
 div[role="radiogroup"] > label {
-    display: flex; align-items: center;
-    padding: 10px 12px; margin-bottom: 6px;
-    border: 1px solid rgba(128,128,128,.35); border-radius: 10px;
-    min-height: 44px; width: 100%;
+    display:flex; align-items:center; min-height:48px; width:100%; margin:0; padding:10px 13px;
+    border:1px solid var(--line); border-radius:10px; background:#091612; transition:.16s ease;
 }
-div[role="radiogroup"] > label:hover { border-color: rgba(120,170,255,.9); }
+div[role="radiogroup"] > label:hover { border-color:var(--field); background:#0c2119; }
+div[role="radiogroup"] > label:has(input:checked) { border-color:var(--field); background:rgba(39,209,127,.11); box-shadow:inset 3px 0 0 var(--field); }
+div[role="radiogroup"] > label p { color:var(--chalk); font-weight:650; }
 
-/* ---- Tabs: scrollable, thumb-sized ---- */
-.stTabs [data-baseweb="tab-list"] { gap: 2px; overflow-x: auto; }
-.stTabs [data-baseweb="tab"] { min-height: 44px; padding: 0 12px; font-size: .95rem; }
+/* Stats, tickets, leaderboard */
+[data-testid="stMetric"] { min-height:116px; padding:1rem; border:1px solid var(--line); border-radius:13px; background:rgba(12,27,22,.75); }
+[data-testid="stMetricLabel"] p { color:var(--muted); font:600 .65rem "IBM Plex Mono"; letter-spacing:.08em; text-transform:uppercase; }
+[data-testid="stMetricValue"] { color:var(--chalk); font:700 1.8rem "Barlow Condensed"; }
+.section-head { display:flex; align-items:baseline; justify-content:space-between; gap:1rem; margin:2rem 0 .8rem; border-bottom:1px solid var(--line); }
+.section-head h3 { margin:0 0 .65rem; color:var(--chalk); font-size:1.55rem; text-transform:uppercase; }
+.section-head span { color:var(--muted); font:500 .62rem "IBM Plex Mono"; text-transform:uppercase; }
+.ticket-card { display:grid; grid-template-columns:minmax(0,1fr) auto; gap:.5rem 1.2rem; padding:1rem 1.1rem; margin:.55rem 0; border:1px solid var(--line); border-left:3px solid var(--signal); border-radius:11px; background:rgba(12,27,22,.7); }
+.ticket-card.settled-won { border-left-color:var(--field); }
+.ticket-card.settled-lost { border-left-color:var(--danger); }
+.ticket-pick { color:var(--chalk); font:700 1.2rem "Barlow Condensed"; }
+.ticket-game, .ticket-meta { color:var(--muted); font:500 .63rem/1.55 "IBM Plex Mono"; text-transform:uppercase; }
+.ticket-money { grid-row:1 / span 2; grid-column:2; text-align:right; }
+.ticket-money strong { display:block; color:var(--chalk); font:700 1.25rem "Barlow Condensed"; }
+.ticket-money span { color:var(--muted); font:500 .58rem "IBM Plex Mono"; text-transform:uppercase; }
+.ticket-result { display:inline-block; margin-left:.4rem; color:var(--field); }
+.ticket-result.lost { color:var(--danger); }
+.ticket-result.push { color:var(--signal); }
+.leader-row { display:grid; grid-template-columns:42px minmax(0,1fr) auto; align-items:center; gap:.7rem; padding:.85rem 1rem; margin:.42rem 0; border:1px solid var(--line); border-radius:11px; background:rgba(12,27,22,.68); }
+.leader-row.is-you { border-color:rgba(39,209,127,.55); background:rgba(39,209,127,.08); }
+.leader-rank { color:var(--signal); font:700 1.25rem "Barlow Condensed"; }
+.leader-name { color:var(--chalk); font:700 1rem "Manrope"; }
+.leader-record { color:var(--muted); font:500 .6rem "IBM Plex Mono"; text-transform:uppercase; }
+.leader-worth { text-align:right; color:var(--chalk); font:700 1.35rem "Barlow Condensed"; }
+.leader-worth small { display:block; color:var(--muted); font:500 .55rem "IBM Plex Mono"; text-transform:uppercase; }
+.footer-note { margin-top:2rem; padding-top:1rem; border-top:1px solid var(--line); color:var(--muted); font:500 .6rem/1.6 "IBM Plex Mono"; text-align:center; text-transform:uppercase; letter-spacing:.05em; }
 
-/* ---- Columns wrap instead of squashing on narrow screens ---- */
+[data-testid="stAlert"] { border-radius:11px; border:1px solid var(--line); }
+.stDataFrame { font-size:.82rem; border:1px solid var(--line); border-radius:10px; overflow:hidden; }
+
 @media (max-width: 640px) {
-    div[data-testid="stHorizontalBlock"] { flex-wrap: wrap; gap: .4rem; }
-    div[data-testid="stHorizontalBlock"] > div[data-testid="column"] {
-        min-width: calc(50% - 0.4rem) !important; flex: 1 1 calc(50% - 0.4rem) !important;
-    }
-    div[data-testid="stMetricValue"] { font-size: 1.25rem; }
-    div[data-testid="stMetricLabel"] { font-size: .75rem; }
-    h1 { font-size: 1.4rem !important; }
-    h2 { font-size: 1.15rem !important; }
+    .block-container { padding:.55rem .75rem 6rem !important; }
+    div[data-testid="stHorizontalBlock"] { flex-wrap:wrap; gap:.5rem; }
+    div[data-testid="stHorizontalBlock"] > div[data-testid="column"] { min-width:calc(50% - .5rem) !important; flex:1 1 calc(50% - .5rem) !important; }
+    div[data-testid="stHorizontalBlock"]:has(.brand-lockup) { flex-wrap:nowrap; align-items:center; gap:.4rem; }
+    div[data-testid="stHorizontalBlock"]:has(.brand-lockup) > div[data-testid="column"] { min-width:0 !important; }
+    div[data-testid="stHorizontalBlock"]:has(.brand-lockup) > div[data-testid="column"]:nth-child(1) { flex:1 1 auto !important; }
+    div[data-testid="stHorizontalBlock"]:has(.brand-lockup) > div[data-testid="column"]:nth-child(2) { flex:0 0 104px !important; }
+    div[data-testid="stHorizontalBlock"]:has(.brand-lockup) > div[data-testid="column"]:nth-child(3) { flex:0 0 76px !important; }
+    .brand-mark { width:36px; height:36px; }
+    .brand-sub { display:none; }
+    .brand-name { font-size:1.05rem; }
+    .auth-hero { min-height:350px; padding:2rem 1.35rem; border-radius:18px; }
+    .auth-hero:after { right:-8%; font-size:12rem; }
+    .auth-title { font-size:3.65rem; }
+    .board-hero { align-items:flex-start; flex-direction:column; }
+    .process-step { padding:.72rem .5rem; font-size:.56rem; text-align:center; }
+    .process-step b { display:block; margin:0 0 .25rem; }
+    .stTabs [data-baseweb="tab"] { padding:0 11px; font-size:.62rem; }
+    .user-chip { text-align:left; }
+    .matchup { font-size:1.55rem; }
+    [data-testid="stMetric"] { min-height:102px; padding:.8rem; }
+    [data-testid="stMetricValue"] { font-size:1.45rem; }
+    .ticket-card { grid-template-columns:minmax(0,1fr) auto; padding:.9rem; }
+    .leader-row { grid-template-columns:30px minmax(0,1fr) auto; padding:.75rem; }
 }
 
-/* ---- Game card chrome ---- */
-.rank-badge {
-    display:inline-block; background:#b91c1c; color:#fff; font-size:.68rem;
-    font-weight:700; padding:1px 5px; border-radius:5px; margin-right:4px;
-    vertical-align:middle;
+@media (prefers-reduced-motion: reduce) {
+    *, *:before, *:after { scroll-behavior:auto !important; transition:none !important; }
 }
-.matchup { font-size:1.02rem; font-weight:650; line-height:1.45; }
-.meta { font-size:.76rem; opacity:.72; margin-top:2px; }
-.pill {
-    display:inline-block; padding:1px 7px; border-radius:999px;
-    border:1px solid rgba(128,128,128,.4); font-size:.7rem; margin-right:4px;
-}
-.stDataFrame { font-size: .82rem; }
 </style>
 """,
     unsafe_allow_html=True,
@@ -304,7 +444,7 @@ def register_user(username: str, password: str, invite: str) -> tuple[bool, str]
     except Exception as exc:  # noqa: BLE001
         return False, f"Could not create account: {exc}"
 
-    return True, "Account created — you're staked with $10,000. Sign in below."
+    return True, "Account created — you're staked with $10,000. Use the first tab to enter."
 
 
 def login_user(username: str, password: str) -> tuple[bool, str]:
@@ -332,17 +472,30 @@ def login_user(username: str, password: str) -> tuple[bool, str]:
 
 
 def auth_screen() -> None:
-    st.title("🏈 The League")
-    st.caption("Private college football pick'em. $10,000 fake bankroll. Standard −110.")
+    st.markdown(
+        """
+        <section class="auth-hero">
+            <div class="eyebrow">Private league · Saturdays only</div>
+            <div class="auth-title">Own the<br>board.</div>
+            <div class="auth-copy">Call your shots, track every ticket, and take the top spot in a season-long college football league built for bragging rights.</div>
+            <div class="hero-proof">
+                <span>$10K starting stack</span>
+                <span>Live weekly lines</span>
+                <span>Full transparency</span>
+            </div>
+        </section>
+        """,
+        unsafe_allow_html=True,
+    )
 
-    tab_in, tab_up = st.tabs(["Sign in", "Create account"])
+    tab_in, tab_up = st.tabs(["Enter the league", "Join with a code"])
 
     with tab_in:
         with st.form("login_form"):
             u = st.text_input("Username", key="li_user", autocomplete="username")
             p = st.text_input("Password", type="password", key="li_pass",
                               autocomplete="current-password")
-            if st.form_submit_button("Sign in", type="primary", width="stretch"):
+            if st.form_submit_button("Enter the league", type="primary", width="stretch"):
                 ok, msg = login_user(u, p)
                 if ok:
                     st.rerun()
@@ -354,8 +507,8 @@ def auth_screen() -> None:
             u = st.text_input("Choose a username", key="su_user")
             p = st.text_input("Choose a password (6+ chars)", type="password", key="su_pass")
             p2 = st.text_input("Confirm password", type="password", key="su_pass2")
-            code = st.text_input("League invite code", key="su_code")
-            if st.form_submit_button("Create account", width="stretch"):
+            code = st.text_input("League code", key="su_code")
+            if st.form_submit_button("Claim my $10K stack", width="stretch"):
                 if p != p2:
                     st.error("Passwords don't match.")
                 else:
@@ -490,8 +643,20 @@ def tab_place_bets(user: dict, balance: Decimal) -> None:
 
     wk = games[0]
     st.markdown(
-        f"### Week {wk['week']} board"
-        f"<span class='meta'> — {wk['season']} {wk['season_type']}</span>",
+        f"""
+        <div class="board-hero">
+            <div>
+                <div class="eyebrow">{escape(str(wk['season_type']))} season · {wk['season']}</div>
+                <div class="board-title">Week {wk['week']} board</div>
+            </div>
+            <div class="board-count">Lines lock at kickoff</div>
+        </div>
+        <div class="process-rail" aria-label="How to place a bet">
+            <div class="process-step"><b>01</b> Pick a game</div>
+            <div class="process-step"><b>02</b> Choose a side</div>
+            <div class="process-step"><b>03</b> Set your stake</div>
+        </div>
+        """,
         unsafe_allow_html=True,
     )
 
@@ -499,7 +664,7 @@ def tab_place_bets(user: dict, balance: Decimal) -> None:
         {c for g in games for c in (g["home_conference"], g["away_conference"]) if c}
     )
 
-    with st.expander("🔎 Filters", expanded=False):
+    with st.expander("Tune the board", expanded=False):
         bet_filter = st.radio(
             "Market",
             ["All markets", "Spread (ATS)", "Over / Under"],
@@ -537,28 +702,34 @@ def tab_place_bets(user: dict, balance: Decimal) -> None:
             continue
         visible.append(g)
 
-    st.caption(f"{len(visible)} of {len(games)} games · Bankroll {fmt_money(balance)} · −110 (1.91×)")
+    st.markdown(
+        f"<div class='board-summary'>{len(visible)} of {len(games)} games showing &nbsp;·&nbsp; "
+        f"Available {fmt_money(balance)} &nbsp;·&nbsp; Standard −110</div>",
+        unsafe_allow_html=True,
+    )
 
     if not visible:
         st.warning("No games match those filters. Loosen them in the Filters panel above.")
         return
 
-    for g in visible:
+    for game_index, g in enumerate(visible, start=1):
         opts = market_options(g, bet_filter)
         separator = "vs" if g["neutral_site"] else "@"
         neutral_note = " · neutral site" if g["neutral_site"] else ""
         pills = (
-            f"<span class='pill'>{g['away_conference'] or 'IND'}</span>"
-            f"<span class='pill'>{g['home_conference'] or 'IND'}</span>"
+            f"<span class='pill'>{escape(str(g['away_conference'] or 'IND'))}</span>"
+            f"<span class='pill'>{escape(str(g['home_conference'] or 'IND'))}</span>"
         )
         if g["lines_provider"]:
-            pills += f"<span class='pill'>{g['lines_provider']}</span>"
+            pills += f"<span class='pill'>{escape(str(g['lines_provider']))}</span>"
 
         with st.container(border=True):
             st.markdown(
-                f"<div class='matchup'>{rank_html(g['away_rank'])}{g['away_team']}"
-                f"<span style='opacity:.55'> {separator} </span>"
-                f"{rank_html(g['home_rank'])}{g['home_team']}</div>"
+                f"<div class='game-kicker'><span class='game-number'>Game {game_index:02d}</span>"
+                f"<span>{_safe_kickoff(g['start_date'])}</span></div>"
+                f"<div class='matchup'>{rank_html(g['away_rank'])}{escape(g['away_team'])}"
+                f"<span class='versus'> {separator} </span>"
+                f"{rank_html(g['home_rank'])}{escape(g['home_team'])}</div>"
                 f"<div class='meta'>{_safe_kickoff(g['start_date'])}{neutral_note}</div>"
                 f"<div class='meta' style='margin-top:5px'>{pills}</div>",
                 unsafe_allow_html=True,
@@ -576,7 +747,7 @@ def tab_place_bets(user: dict, balance: Decimal) -> None:
                 c1, c2 = st.columns([1, 1])
                 with c1:
                     wager = st.number_input(
-                        "Wager ($)",
+                        "Your stake ($)",
                         min_value=1.0,
                         max_value=float(max(balance, Decimal("1.00"))),
                         value=100.0 if balance >= 100 else float(max(balance, Decimal("1.00"))),
@@ -584,10 +755,15 @@ def tab_place_bets(user: dict, balance: Decimal) -> None:
                         key=f"amt_{g['id']}",
                     )
                 with c2:
-                    st.markdown("<div style='height:28px'></div>", unsafe_allow_html=True)
-                    submitted = st.form_submit_button(
-                        "Place bet", type="primary", width="stretch"
+                    possible_return = money(Decimal(str(wager)) * DEFAULT_MULTIPLIER)
+                    st.markdown(
+                        f"<div class='meta' style='margin-top:8px'>Possible return</div>"
+                        f"<div class='matchup'>{fmt_money(possible_return)}</div>",
+                        unsafe_allow_html=True,
                     )
+                submitted = st.form_submit_button(
+                    "Lock in this pick", type="primary", width="stretch"
+                )
 
                 if submitted:
                     if choice is None:
@@ -644,6 +820,47 @@ def bets_to_frames(rows: list[dict]) -> tuple[pd.DataFrame, pd.DataFrame]:
     return pd.DataFrame(open_rows), pd.DataFrame(settled_rows)
 
 
+def render_ticket_cards(rows: list[dict], *, settled: bool) -> None:
+    """Render tickets as responsive slips instead of a horizontally scrolling table."""
+    for bet in rows:
+        wager = money(bet["wager_amount"])
+        matchup = f"{bet['away_team']} @ {bet['home_team']}"
+        if not settled:
+            potential = money(wager * Decimal(str(bet["payout_multiplier"])))
+            detail = f"Week {bet['week']} · {_safe_kickoff(bet['start_date'])}"
+            money_label = "Possible return"
+            money_value = fmt_money(potential)
+            card_class = ""
+            result = ""
+        else:
+            status = str(bet["status"])
+            profit = money(bet["payout_amount"]) - wager
+            score = (
+                f"{bet['away_score']}–{bet['home_score']} final"
+                if bet["home_score"] is not None
+                else "Final"
+            )
+            detail = f"Week {bet['week']} · {score}"
+            money_label = "Profit / loss"
+            money_value = fmt_money(profit)
+            card_class = f"settled-{status}"
+            result = f"<span class='ticket-result {status}'>{escape(status.upper())}</span>"
+
+        st.markdown(
+            f"""
+            <div class="ticket-card {card_class}">
+                <div>
+                    <div class="ticket-pick">{escape(describe_bet(bet))}{result}</div>
+                    <div class="ticket-game">{escape(matchup)}</div>
+                </div>
+                <div class="ticket-money"><strong>{money_value}</strong><span>{money_label}</span></div>
+                <div class="ticket-meta">{escape(detail)} · Staked {fmt_money(wager)}</div>
+            </div>
+            """,
+            unsafe_allow_html=True,
+        )
+
+
 MONEY_COLS = {
     "Wager": st.column_config.NumberColumn("Wager", format="$%.2f", width="small"),
     "To Win": st.column_config.NumberColumn("To Win", format="$%.2f", width="small"),
@@ -675,30 +892,28 @@ def tab_my_tickets(user: dict, balance: Decimal) -> None:
     losses = sum(1 for b in rows if b["status"] == "lost")
     pushes = sum(1 for b in rows if b["status"] == "push")
     graded = wins + losses
-    st.caption(
-        f"Record {wins}-{losses}-{pushes}"
-        + (f" · {wins / graded:.1%} win rate" if graded else "")
+    record = f"{wins}-{losses}-{pushes}"
+    win_rate = f" · {wins / graded:.1%} win rate" if graded else ""
+    open_rows = [b for b in rows if b["status"] == "pending"]
+    settled_rows = [b for b in rows if b["status"] != "pending"]
+
+    st.markdown(
+        f"<div class='section-head'><h3>Open tickets</h3><span>{len(open_rows)} live · {fmt_money(open_stake)} at risk</span></div>",
+        unsafe_allow_html=True,
     )
-
-    df_open, df_settled = bets_to_frames(rows)
-
-    st.markdown("#### Open tickets")
-    if df_open.empty:
-        st.info("No open tickets. Head to **Place Bets** to get on the board.")
+    if not open_rows:
+        st.info("Your slip is clean. Head to the board and make your first call.")
     else:
-        st.dataframe(
-            df_open, width="stretch", hide_index=True,
-            column_config={k: v for k, v in MONEY_COLS.items() if k in df_open.columns},
-        )
+        render_ticket_cards(open_rows, settled=False)
 
-    st.markdown("#### Settled tickets")
-    if df_settled.empty:
-        st.info("Nothing settled yet.")
+    st.markdown(
+        f"<div class='section-head'><h3>Settled</h3><span>Record {record}{win_rate}</span></div>",
+        unsafe_allow_html=True,
+    )
+    if not settled_rows:
+        st.info("Results will land here after the final whistle.")
     else:
-        st.dataframe(
-            df_settled, width="stretch", hide_index=True,
-            column_config={k: v for k, v in MONEY_COLS.items() if k in df_settled.columns},
-        )
+        render_ticket_cards(settled_rows, settled=True)
 
 
 # =====================================================================
@@ -710,27 +925,39 @@ def tab_leaderboard(user: dict) -> None:
         st.info("No players yet.")
         return
 
-    df = pd.DataFrame(
-        [
-            {
-                "#": i + 1,
-                "Player": r["username"] + (" (you)" if str(r["user_id"]) == user["id"] else ""),
-                "Net Worth": float(money(r["net_worth"])),
-                "Cash": float(money(r["cash"])),
-                "At Risk": float(money(r["open_stake"])),
-                "Record": f"{r['wins']}-{r['losses']}-{r['pushes']}",
-                "P/L": float(money(r["settled_pl"])),
-            }
-            for i, r in enumerate(board)
-        ]
-    )
-    st.dataframe(
-        df, width="stretch", hide_index=True,
-        column_config={k: v for k, v in MONEY_COLS.items() if k in df.columns},
+    leader = board[0]
+    st.markdown(
+        f"""
+        <div class="board-hero">
+            <div><div class="eyebrow">Season standings</div><div class="board-title">The chase</div></div>
+            <div class="board-count">Leader · {escape(str(leader['username']))} · {fmt_money(leader['net_worth'])}</div>
+        </div>
+        """,
+        unsafe_allow_html=True,
     )
 
-    st.markdown("#### 🔍 Rival tracker")
-    st.caption("Every ticket in the league is public. Tap a player to inspect their slip.")
+    for index, row in enumerate(board, start=1):
+        is_you = str(row["user_id"]) == user["id"]
+        you_label = " · You" if is_you else ""
+        st.markdown(
+            f"""
+            <div class="leader-row {'is-you' if is_you else ''}">
+                <div class="leader-rank">{index:02d}</div>
+                <div>
+                    <div class="leader-name">{escape(str(row['username']))}{you_label}</div>
+                    <div class="leader-record">{row['wins']}-{row['losses']}-{row['pushes']} · {fmt_money(row['open_stake'])} at risk</div>
+                </div>
+                <div class="leader-worth">{fmt_money(row['net_worth'])}<small>Net worth</small></div>
+            </div>
+            """,
+            unsafe_allow_html=True,
+        )
+
+    st.markdown(
+        "<div class='section-head'><h3>Scout the league</h3><span>Every ticket is public</span></div>",
+        unsafe_allow_html=True,
+    )
+    st.caption("Open a player to see exactly where their money is riding.")
 
     all_bets = load_all_bets()
     by_user: dict[str, list[dict]] = {}
@@ -740,32 +967,26 @@ def tab_leaderboard(user: dict) -> None:
     for r in board:
         uid = str(r["user_id"])
         label = (
-            f"{r['username']} — {fmt_money(r['net_worth'])} "
-            f"({r['wins']}-{r['losses']}-{r['pushes']})"
+            f"{r['username']} · {fmt_money(r['net_worth'])} · "
+            f"{r['wins']}-{r['losses']}-{r['pushes']}"
         )
         with st.expander(label, expanded=False):
             rows = by_user.get(uid, [])
             if not rows:
                 st.caption("No bets placed yet.")
                 continue
-            df_open, df_settled = bets_to_frames(rows)
-            st.markdown("**Open**")
-            if df_open.empty:
+            open_rows = [b for b in rows if b["status"] == "pending"]
+            settled_rows = [b for b in rows if b["status"] != "pending"]
+            st.markdown("**Open tickets**")
+            if not open_rows:
                 st.caption("No open tickets.")
             else:
-                st.dataframe(
-                    df_open.drop(columns=["Kickoff"], errors="ignore"),
-                    width="stretch", hide_index=True,
-                    column_config={k: v for k, v in MONEY_COLS.items() if k in df_open.columns},
-                )
-            st.markdown("**Settled**")
-            if df_settled.empty:
+                render_ticket_cards(open_rows, settled=False)
+            st.markdown("**Settled tickets**")
+            if not settled_rows:
                 st.caption("Nothing settled.")
             else:
-                st.dataframe(
-                    df_settled, width="stretch", hide_index=True,
-                    column_config={k: v for k, v in MONEY_COLS.items() if k in df_settled.columns},
-                )
+                render_ticket_cards(settled_rows, settled=True)
 
 
 # =====================================================================
@@ -785,11 +1006,20 @@ def main() -> None:
         st.stop()
         return
 
-    head_l, head_r = st.columns([3, 1])
+    head_l, head_m, head_r = st.columns([2.2, 1.2, .75])
     with head_l:
         st.markdown(
-            f"<div class='matchup'>🏈 {user['username']}</div>"
-            f"<div class='meta'>Cash {fmt_money(balance)}</div>",
+            "<div class='topbar'><div class='brand-lockup'>"
+            "<div class='brand-mark'>4D</div><div>"
+            "<div class='brand-name'>Fourth Down</div>"
+            "<div class='brand-sub'>The Saturday league</div>"
+            "</div></div></div>",
+            unsafe_allow_html=True,
+        )
+    with head_m:
+        st.markdown(
+        f"<div class='user-chip'><strong>{escape(str(user['username']))}</strong>"
+            f"<span>{fmt_money(balance)} available</span></div>",
             unsafe_allow_html=True,
         )
     with head_r:
@@ -798,7 +1028,7 @@ def main() -> None:
             refresh_data()
             st.rerun()
 
-    t1, t2, t3 = st.tabs(["🎯 Place Bets", "🎟️ My Tickets", "🏆 Leaderboard"])
+    t1, t2, t3 = st.tabs(["The board", "My tickets", "Standings"])
     with t1:
         tab_place_bets(user, balance)
     with t2:
@@ -806,11 +1036,14 @@ def main() -> None:
     with t3:
         tab_leaderboard(user)
 
-    st.divider()
     if st.button("↻ Refresh data", width="stretch"):
         refresh_data()
         st.rerun()
-    st.caption("Play money only. Lines via collegefootballdata.com. Settlement runs hourly.")
+    st.markdown(
+        "<div class='footer-note'>Play money only · Lines via College Football Data · "
+        "Tickets settle automatically after the final</div>",
+        unsafe_allow_html=True,
+    )
 
 
 if __name__ == "__main__":
