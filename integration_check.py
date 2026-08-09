@@ -149,7 +149,7 @@ def main() -> int:
     check("winners", s["won"], 1)
     check("losses", s["lost"], 2)
     check("pushes", s["push"], 1)
-    check("total credited", s["credited"], Decimal("1255.00"))
+    check("total credited", s["credited"], Decimal("1300.00"))
 
     with ro() as c:
         rows = q(c, """select bet_type, status, payout_amount from public.bets
@@ -159,27 +159,27 @@ def main() -> int:
         "my tickets settled correctly",
         got,
         [
-            ("spread_home", "won", "955.00"),   # 500 * 1.91
+            ("spread_home", "won", "1000.00"),  # 500 * 2.00, no vig
             ("spread_away", "push", "300.00"),  # stake returned
             ("over", "lost", "0.00"),
         ],
     )
-    # 9000 cash + 955 + 300 = 10255
-    check("balance after settlement", app.get_balance(uid), Decimal("10255.00"))
+    # 9000 cash + 1000 + 300 = 10300
+    check("balance after settlement", app.get_balance(uid), Decimal("10300.00"))
     check("rival lost the stake", app.get_balance(rid), Decimal("8000.00"))
 
     print("\n[idempotency]")
     s2 = settle_bets()
     check("re-running settles nothing", s2["graded"], 0)
-    check("balance unchanged", app.get_balance(uid), Decimal("10255.00"))
+    check("balance unchanged", app.get_balance(uid), Decimal("10300.00"))
 
     print("\n[leaderboard]")
     app.refresh_data()
     board = app.load_leaderboard()
     check("ranked by net worth", [r["username"] for r in board], ["Dude95", "Rival"])
     me_row = board[0]
-    check("net worth = cash + open stake", Decimal(str(me_row["net_worth"])), Decimal("10255.00"))
-    check("settled P/L", Decimal(str(me_row["settled_pl"])), Decimal("255.00"))
+    check("net worth = cash + open stake", Decimal(str(me_row["net_worth"])), Decimal("10300.00"))
+    check("settled P/L", Decimal(str(me_row["settled_pl"])), Decimal("300.00"))
     check("record", (me_row["wins"], me_row["losses"], me_row["pushes"]), (1, 1, 1))
     check("all bets visible for transparency", len(app.load_all_bets()), 4)
 

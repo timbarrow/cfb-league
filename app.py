@@ -15,6 +15,7 @@ from decimal import ROUND_HALF_UP, Decimal
 from html import escape
 from pathlib import Path
 
+import altair as alt
 import pandas as pd
 import streamlit as st
 from sqlalchemy.exc import IntegrityError
@@ -39,7 +40,7 @@ except Exception:  # pragma: no cover - tzdata missing
 
 CENT = Decimal("0.01")
 STARTING_BANKROLL = Decimal("10000.00")
-DEFAULT_MULTIPLIER = Decimal("1.91")  # -110
+DEFAULT_MULTIPLIER = Decimal("2.00")  # no-vig league: stake + equal profit
 
 # =====================================================================
 # Page config + mobile-first CSS
@@ -377,6 +378,40 @@ def load_leaderboard() -> list[dict]:
 
 
 @st.cache_data(ttl=30, show_spinner=False)
+def load_weekly_standings() -> list[dict]:
+    """End-of-week league value, derived from settled tickets in the latest season."""
+    sql = """
+    with current_season as (
+        select max(season) as season from public.games
+    ),
+    completed_weeks as (
+        select distinct g.season, g.week
+          from public.games g
+          join current_season cs on cs.season = g.season
+         where g.status = 'completed'
+    )
+    select u.id as user_id, u.username, w.season, w.week,
+           cast(
+               :starting + coalesce((
+                   select sum(b.payout_amount - b.wager_amount)
+                     from public.bets b
+                     join public.games g on g.id = b.game_id
+                    where b.user_id = u.id
+                      and b.status in ('won', 'lost', 'push')
+                      and g.season = w.season
+                      and g.week <= w.week
+               ), 0)
+               as numeric(14,2)
+           ) as net_worth
+      from public.users u
+      cross join completed_weeks w
+     order by w.week, net_worth desc, u.username
+    """
+    with ro() as conn:
+        return q(conn, sql, starting=STARTING_BANKROLL)
+
+
+@st.cache_data(ttl=30, show_spinner=False)
 def load_all_bets() -> list[dict]:
     """Every ticket in the league — the transparency requirement."""
     sql = """
@@ -396,6 +431,7 @@ def refresh_data() -> None:
     load_upcoming_games.clear()
     load_user_bets.clear()
     load_leaderboard.clear()
+    load_weekly_standings.clear()
     load_all_bets.clear()
 
 
@@ -716,7 +752,7 @@ def _legacy_tab_place_bets(user: dict, balance: Decimal) -> None:
 
     st.markdown(
         f"<div class='board-summary'>{len(visible)} of {len(games)} games showing &nbsp;·&nbsp; "
-        f"Available {fmt_money(balance)} &nbsp;·&nbsp; Standard −110</div>",
+        f"Available {fmt_money(balance)} &nbsp;·&nbsp; Even money · No vig</div>",
         unsafe_allow_html=True,
     )
 
@@ -815,10 +851,11 @@ def _choose_market(game: dict, option: tuple[str, Decimal, str]) -> None:
         "matchup": f"{game['away_team']} {separator} {game['home_team']}",
         "kickoff": _safe_kickoff(game["start_date"]),
     }
+    st.session_state.open_bet_dialog = True
 
 
-def _set_slip_wager(amount: int) -> None:
-    st.session_state.slip_wager = float(amount)
+def _set_slip_wager(amount: int, wager_key: str) -> None:
+    st.session_state[wager_key] = float(amount)
 
 
 def _render_game_card(game: dict, options: list[tuple[str, Decimal, str]]) -> None:
@@ -856,17 +893,17 @@ def _render_game_card(game: dict, options: list[tuple[str, Decimal, str]]) -> No
                 and active.get("bet_type") == bet_type
             )
             with col:
-                if st.button(
+                st.button(
                     label,
                     key=f"market_{game['id']}_{bet_type}",
                     type="primary" if is_active else "secondary",
                     width="stretch",
-                ):
-                    _choose_market(game, option)
-                    st.rerun()
+                    on_click=_choose_market,
+                    args=(game, option),
+                )
 
 
-def _render_bet_slip(user: dict, balance: Decimal) -> None:
+def _render_bet_slip(user: dict, balance: Decimal, *, key_prefix: str = "") -> None:
     flash = st.session_state.pop("bet_flash", None)
     if flash:
         st.success(flash)
@@ -897,16 +934,17 @@ def _render_bet_slip(user: dict, balance: Decimal) -> None:
 
     max_wager = float(max(balance, Decimal("1.00")))
     default_wager = 100.0 if balance >= 100 else max_wager
-    current = float(st.session_state.get("slip_wager", default_wager))
-    if "slip_wager" not in st.session_state or current > max_wager or current < 1:
-        st.session_state.slip_wager = default_wager
+    wager_key = f"{key_prefix}slip_wager"
+    current = float(st.session_state.get(wager_key, default_wager))
+    if wager_key not in st.session_state or current > max_wager or current < 1:
+        st.session_state[wager_key] = default_wager
 
     wager = st.number_input(
         "Stake ($)",
         min_value=1.0,
         max_value=max_wager,
         step=25.0,
-        key="slip_wager",
+        key=wager_key,
     )
 
     quick_cols = st.columns(3)
@@ -914,11 +952,11 @@ def _render_bet_slip(user: dict, balance: Decimal) -> None:
         with col:
             st.button(
                 f"${amount}",
-                key=f"quick_stake_{amount}",
+                key=f"{key_prefix}quick_stake_{amount}",
                 disabled=balance < amount,
                 width="stretch",
                 on_click=_set_slip_wager,
-                args=(amount,),
+                args=(amount, wager_key),
             )
 
     stake = Decimal(str(wager))
@@ -936,7 +974,7 @@ def _render_bet_slip(user: dict, balance: Decimal) -> None:
 
     if st.button(
         f"Place {selection['label']}",
-        key="place_selected_bet",
+        key=f"{key_prefix}place_selected_bet",
         type="primary",
         width="stretch",
     ):
@@ -955,6 +993,11 @@ def _render_bet_slip(user: dict, balance: Decimal) -> None:
             st.error(msg)
 
     st.markdown("<div class='fd-slip-footer'></div>", unsafe_allow_html=True)
+
+
+@st.dialog("Your bet ticket", width="small")
+def _bet_dialog(user: dict, balance: Decimal) -> None:
+    _render_bet_slip(user, balance, key_prefix="dialog_")
 
 
 def tab_place_bets(user: dict, balance: Decimal) -> None:
@@ -1019,7 +1062,7 @@ def tab_place_bets(user: dict, balance: Decimal) -> None:
 
     st.markdown(
         f"<div class='fd-board-summary'>{len(visible)} of {len(games)} games · "
-        f"{fmt_money(balance)} available · Standard −110</div>",
+        f"{fmt_money(balance)} available · Even money · No house vig</div>",
         unsafe_allow_html=True,
     )
 
@@ -1033,6 +1076,9 @@ def tab_place_bets(user: dict, balance: Decimal) -> None:
             _render_game_card(game, market_options(game, bet_filter))
     with slip_col:
         _render_bet_slip(user, balance)
+
+    if st.session_state.pop("open_bet_dialog", False):
+        _bet_dialog(user, balance)
 
 
 # =====================================================================
@@ -1179,6 +1225,136 @@ def tab_my_tickets(user: dict, balance: Decimal) -> None:
 # =====================================================================
 # Tab 3 — Leaderboard & Rival Tracker
 # =====================================================================
+def render_weekly_dashboard(rows: list[dict], user: dict) -> None:
+    st.markdown(
+        "<div class='section-head'><h3>Race through the season</h3>"
+        "<span>End-of-week rank · settled tickets only</span></div>",
+        unsafe_allow_html=True,
+    )
+    if not rows:
+        st.caption("The movement chart starts after the first week has a final score.")
+        return
+
+    history = pd.DataFrame(
+        {
+            "user_id": [str(row["user_id"]) for row in rows],
+            "player": [str(row["username"]) for row in rows],
+            "season": [int(row["season"]) for row in rows],
+            "week": [int(row["week"]) for row in rows],
+            "net_worth": [float(row["net_worth"]) for row in rows],
+        }
+    )
+    latest_season = int(history["season"].max())
+    history = history[history["season"] == latest_season].copy()
+    history["rank"] = (
+        history.groupby("week")["net_worth"]
+        .rank(method="min", ascending=False)
+        .astype(int)
+    )
+    history["week_label"] = "W" + history["week"].astype(str)
+    history["value_label"] = history["net_worth"].map(lambda value: f"${value:,.2f}")
+
+    max_rank = max(int(history["rank"].max()), 2)
+    palette = [
+        "#f2c84b",
+        "#8ecae6",
+        "#ef8279",
+        "#ddebcb",
+        "#c5a3ff",
+        "#ff9f5a",
+        "#63d1a8",
+        "#f7f3e8",
+        "#de9dcc",
+        "#9fb2ff",
+    ]
+    chart = (
+        alt.Chart(history)
+        .mark_line(point=alt.OverlayMarkDef(filled=True, size=78), strokeWidth=3)
+        .encode(
+            x=alt.X(
+                "week:O",
+                title="WEEK",
+                axis=alt.Axis(labelAngle=0, tickSize=0),
+            ),
+            y=alt.Y(
+                "rank:Q",
+                title="PLACE",
+                scale=alt.Scale(domain=[1, max_rank], reverse=True),
+                axis=alt.Axis(tickMinStep=1),
+            ),
+            color=alt.Color(
+                "player:N",
+                title=None,
+                scale=alt.Scale(range=palette),
+                legend=alt.Legend(orient="bottom", columns=2),
+            ),
+            detail="user_id:N",
+            tooltip=[
+                alt.Tooltip("player:N", title="Player"),
+                alt.Tooltip("week:O", title="Week"),
+                alt.Tooltip("rank:Q", title="Place"),
+                alt.Tooltip("value_label:N", title="Net worth"),
+            ],
+        )
+        .properties(height=285)
+        .configure(background="transparent")
+        .configure_view(stroke="#87978c")
+        .configure_axis(
+            gridColor="#42574b",
+            labelColor="#f7f3e8",
+            titleColor="#ddebcb",
+            titleFont="IBM Plex Mono",
+            labelFont="IBM Plex Mono",
+        )
+        .configure_legend(
+            labelColor="#f7f3e8",
+            labelFont="IBM Plex Mono",
+            symbolStrokeWidth=4,
+        )
+    )
+    st.altair_chart(chart, width="stretch")
+
+    weeks = sorted(history["week"].unique())
+    latest_week = int(weeks[-1])
+    previous_week = int(weeks[-2]) if len(weeks) > 1 else None
+    current = history[history["week"] == latest_week].sort_values(["rank", "player"])
+    previous_ranks = (
+        history[history["week"] == previous_week].set_index("user_id")["rank"].to_dict()
+        if previous_week is not None
+        else {}
+    )
+
+    st.markdown(
+        f"<div class='fd-movement-head'><span>Week {latest_week} movement</span>"
+        f"<span>{latest_season} season</span></div>",
+        unsafe_allow_html=True,
+    )
+    for row in current.itertuples(index=False):
+        previous_rank = previous_ranks.get(row.user_id)
+        movement = int(previous_rank) - int(row.rank) if previous_rank is not None else None
+        if movement is None:
+            move_label, move_class = "NEW", "flat"
+        elif movement > 0:
+            move_label, move_class = f"▲ {movement}", "up"
+        elif movement < 0:
+            move_label, move_class = f"▼ {abs(movement)}", "down"
+        else:
+            move_label, move_class = "—", "flat"
+        you_class = " is-you" if row.user_id == str(user["id"]) else ""
+        you_label = " · You" if you_class else ""
+        st.markdown(
+            f"""
+            <div class="fd-movement-row{you_class}">
+                <div class="fd-movement-rank">{int(row.rank):02d}</div>
+                <div class="fd-movement-player">{escape(row.player)}{you_label}</div>
+                <div class="fd-movement-worth">{fmt_money(row.net_worth)}</div>
+                <div class="fd-movement-change {move_class}">{move_label}</div>
+            </div>
+            """,
+            unsafe_allow_html=True,
+        )
+
+
 def tab_leaderboard(user: dict) -> None:
     board = load_leaderboard()
     if not board:
@@ -1193,6 +1369,14 @@ def tab_leaderboard(user: dict) -> None:
             <p>Leader · {escape(str(leader['username']))} · {fmt_money(leader['net_worth'])}</p>
         </div>
         """,
+        unsafe_allow_html=True,
+    )
+
+    render_weekly_dashboard(load_weekly_standings(), user)
+
+    st.markdown(
+        "<div class='section-head'><h3>Current table</h3>"
+        "<span>Cash + open stake</span></div>",
         unsafe_allow_html=True,
     )
 

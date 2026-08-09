@@ -1,7 +1,7 @@
 # 🏈 CFB League — private college football betting app
 
 A mobile-first, fake-money betting league for ~10 people. Everyone starts with
-**$10,000**, bets spreads and totals at standard **−110 (1.91× return)**, and the
+**$10,000**, bets spreads and totals at **even money (2.00× return, no vig)**, and the
 leaderboard ranks players by net worth. Every ticket in the league is public.
 
 Runs for **$0/month**: Streamlit Community Cloud + Supabase free tier +
@@ -94,7 +94,7 @@ The stake is debited when the ticket is placed. On settlement:
 
 | Result | Credited back |
 |---|---|
-| Won | `wager × 1.91` (stake + 91% profit) |
+| Won | `wager × 2.00` (stake + equal profit) |
 | Push | `wager` |
 | Lost | `0` |
 

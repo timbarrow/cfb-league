@@ -5,7 +5,7 @@ Grades every `pending` bet whose game is `completed`, then credits winnings
 back to the bettor's balance.
 
 Money model (stake is debited at placement time):
-    won   -> credit wager * payout_multiplier   (1.91 on a -110 line: stake + 0.91 profit)
+    won   -> credit wager * payout_multiplier   (2.00 no-vig default: stake + equal profit)
     push  -> credit wager                        (stake back)
     lost  -> credit 0
 

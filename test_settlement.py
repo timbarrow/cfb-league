@@ -70,6 +70,7 @@ except ValueError:
 
 # --- Payouts ---------------------------------------------------------------
 check("win pays 1.91x", payout_for("won", 100, Decimal("1.91")), Decimal("191.00"))
+check("no-vig win pays 2x", payout_for("won", 100, Decimal("2.00")), Decimal("200.00"))
 check("loss pays 0", payout_for("lost", 100, Decimal("1.91")), Decimal("0.00"))
 check("push refunds stake", payout_for("push", 100, Decimal("1.91")), Decimal("100.00"))
 # Rounding: 33.33 * 1.91 = 63.6603 -> 63.66

@@ -77,7 +77,7 @@ create table if not exists public.bets (
     -- movement in `games` never re-prices an existing ticket.
     line_placed       numeric(5,1)  not null,
     wager_amount      numeric(14,2) not null,
-    payout_multiplier numeric(6,4)  not null default 1.91,   -- total return on a win (-110)
+    payout_multiplier numeric(6,4)  not null default 2.00,   -- no-vig: stake + equal profit
     status            text          not null default 'pending',
     payout_amount     numeric(14,2),                          -- credited back on settlement
     created_at        timestamptz   not null default now(),
