@@ -1,9 +1,9 @@
 """
 integration_check.py — end-to-end smoke test against a REAL PostgreSQL.
 
-It applies schema.sql, then exercises: signup, bet placement, the kickoff lock,
-the balance guard, line-movement rejection, duplicate-ticket protection,
-settlement (win / loss / push), idempotent re-settlement, and the leaderboard.
+It applies schema.sql, then exercises: signup, bet placement, repeat tickets,
+the kickoff lock, the balance guard, line-movement rejection, settlement
+(win / loss / push), idempotent re-settlement, and the leaderboard.
 
     DATABASE_URL=postgresql://... python integration_check.py
 
@@ -38,7 +38,7 @@ def reset_schema() -> None:
     here = os.path.dirname(os.path.abspath(__file__))
     with tx() as c:
         c.execute(text("drop view if exists public.leaderboard cascade"))
-        for t in ("bets", "games", "users"):
+        for t in ("auth_sessions", "bets", "games", "users"):
             c.execute(text(f"drop table if exists public.{t} cascade"))
     with tx() as c:
         c.exec_driver_sql(open(os.path.join(here, "schema.sql"), encoding="utf-8").read())
@@ -92,7 +92,7 @@ def main() -> int:
     check("balance debited", app.get_balance(uid), Decimal("9500.00"))
 
     ok, msg = app.place_bet(uid, 101, "spread_home", Decimal("-3.5"), Decimal("100"))
-    check("duplicate open ticket blocked", ok, False)
+    check("repeat ticket on the same line allowed", ok, True)
 
     ok, msg = app.place_bet(uid, 101, "over", Decimal("52.5"), Decimal("1000000"))
     check("overdraw blocked", (ok, "Insufficient" in msg), (False, True))
@@ -110,7 +110,7 @@ def main() -> int:
     ok, _ = app.place_bet(rid, 101, "spread_away", Decimal("3.5"), Decimal("2000"))
     check("rival places bet", ok, True)
 
-    check("balance after 3 bets", app.get_balance(uid), Decimal("9000.00"))
+    check("balance after 4 bets", app.get_balance(uid), Decimal("8900.00"))
 
     print("\n[upcoming-week isolation]")
     with tx() as c:
@@ -143,13 +143,13 @@ def main() -> int:
     from settle_bets import settle_bets
 
     s = settle_bets()
-    # 4 tickets: my Georgia -3.5 (win), my OSU +7 push, my Texas over (loss),
-    # rival's Alabama +3.5 (loss — Georgia won by 11).
-    check("bets graded", s["graded"], 4)
-    check("winners", s["won"], 1)
+    # 5 tickets: two Georgia -3.5 wins, my OSU +7 push, my Texas over loss,
+    # and the rival's Alabama +3.5 loss.
+    check("bets graded", s["graded"], 5)
+    check("winners", s["won"], 2)
     check("losses", s["lost"], 2)
     check("pushes", s["push"], 1)
-    check("total credited", s["credited"], Decimal("1300.00"))
+    check("total credited", s["credited"], Decimal("1500.00"))
 
     with ro() as c:
         rows = q(c, """select bet_type, status, payout_amount from public.bets
@@ -160,28 +160,29 @@ def main() -> int:
         got,
         [
             ("spread_home", "won", "1000.00"),  # 500 * 2.00, no vig
+            ("spread_home", "won", "200.00"),   # same side/line, separate ticket
             ("spread_away", "push", "300.00"),  # stake returned
             ("over", "lost", "0.00"),
         ],
     )
-    # 9000 cash + 1000 + 300 = 10300
-    check("balance after settlement", app.get_balance(uid), Decimal("10300.00"))
+    # 8900 cash + 1000 + 200 + 300 = 10400
+    check("balance after settlement", app.get_balance(uid), Decimal("10400.00"))
     check("rival lost the stake", app.get_balance(rid), Decimal("8000.00"))
 
     print("\n[idempotency]")
     s2 = settle_bets()
     check("re-running settles nothing", s2["graded"], 0)
-    check("balance unchanged", app.get_balance(uid), Decimal("10300.00"))
+    check("balance unchanged", app.get_balance(uid), Decimal("10400.00"))
 
     print("\n[leaderboard]")
     app.refresh_data()
     board = app.load_leaderboard()
     check("ranked by net worth", [r["username"] for r in board], ["Dude95", "Rival"])
     me_row = board[0]
-    check("net worth = cash + open stake", Decimal(str(me_row["net_worth"])), Decimal("10300.00"))
-    check("settled P/L", Decimal(str(me_row["settled_pl"])), Decimal("300.00"))
-    check("record", (me_row["wins"], me_row["losses"], me_row["pushes"]), (1, 1, 1))
-    check("all bets visible for transparency", len(app.load_all_bets()), 4)
+    check("net worth = cash + open stake", Decimal(str(me_row["net_worth"])), Decimal("10400.00"))
+    check("settled P/L", Decimal(str(me_row["settled_pl"])), Decimal("400.00"))
+    check("record", (me_row["wins"], me_row["losses"], me_row["pushes"]), (2, 1, 1))
+    check("all bets visible for transparency", len(app.load_all_bets()), 5)
 
     print()
     if FAILS:

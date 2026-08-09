@@ -10,12 +10,15 @@ Tabs
 
 from __future__ import annotations
 
-from datetime import datetime, timezone
+from datetime import datetime, timedelta, timezone
 from decimal import ROUND_HALF_UP, Decimal
 from html import escape
 from pathlib import Path
+import hashlib
+import secrets
 
 import altair as alt
+import extra_streamlit_components as stx
 import pandas as pd
 import streamlit as st
 from sqlalchemy.exc import IntegrityError
@@ -41,6 +44,8 @@ except Exception:  # pragma: no cover - tzdata missing
 CENT = Decimal("0.01")
 STARTING_BANKROLL = Decimal("10000.00")
 DEFAULT_MULTIPLIER = Decimal("2.00")  # no-vig league: stake + equal profit
+AUTH_COOKIE = "fourth_down_session"
+AUTH_SESSION_DAYS = 30
 
 # =====================================================================
 # Page config + mobile-first CSS
@@ -70,7 +75,7 @@ st.markdown(
     --danger: #ff6b5f;
 }
 
-html { scroll-behavior: smooth; }
+html { scroll-behavior: smooth; -webkit-text-size-adjust: 100%; }
 body, [class*="css"] { font-family: "Manrope", sans-serif; }
 [data-testid="stAppViewContainer"] {
     color: var(--chalk);
@@ -444,6 +449,95 @@ def get_balance(user_id: str) -> Decimal:
 # =====================================================================
 # Auth
 # =====================================================================
+@st.cache_resource(show_spinner=False)
+def ensure_runtime_schema() -> None:
+    """Apply small, idempotent migrations needed by the deployed app."""
+    with tx() as conn:
+        exec_(conn, "drop index if exists public.bets_one_open_per_market")
+        exec_(
+            conn,
+            """
+            create table if not exists public.auth_sessions (
+                token_hash   char(64) primary key,
+                user_id      uuid not null references public.users(id) on delete cascade,
+                created_at   timestamptz not null default now(),
+                expires_at   timestamptz not null,
+                last_seen_at timestamptz not null default now()
+            )
+            """,
+        )
+        exec_(
+            conn,
+            """create index if not exists auth_sessions_expires_idx
+                   on public.auth_sessions (expires_at)""",
+        )
+
+
+def _cookie_manager():
+    return stx.CookieManager(key="fourth_down_cookie_manager")
+
+
+def _token_hash(token: str) -> str:
+    return hashlib.sha256(token.encode("utf-8")).hexdigest()
+
+
+def create_auth_session(user_id: str) -> str:
+    """Store only a hash server-side; the random raw token stays in the browser."""
+    token = secrets.token_urlsafe(32)
+    expires = datetime.now(timezone.utc) + timedelta(days=AUTH_SESSION_DAYS)
+    with tx() as conn:
+        exec_(conn, "delete from public.auth_sessions where expires_at <= now()")
+        exec_(
+            conn,
+            """insert into public.auth_sessions (token_hash, user_id, expires_at)
+               values (:token_hash, :user_id, :expires_at)""",
+            token_hash=_token_hash(token),
+            user_id=user_id,
+            expires_at=expires,
+        )
+    return token
+
+
+def restore_auth_session(token: str) -> dict | None:
+    if not token:
+        return None
+    with tx() as conn:
+        row = q1(
+            conn,
+            """select u.id, u.username, u.is_admin
+                 from public.auth_sessions s
+                 join public.users u on u.id = s.user_id
+                where s.token_hash = :token_hash
+                  and s.expires_at > now()""",
+            token_hash=_token_hash(token),
+        )
+        if row:
+            exec_(
+                conn,
+                """update public.auth_sessions set last_seen_at = now()
+                    where token_hash = :token_hash""",
+                token_hash=_token_hash(token),
+            )
+    if not row:
+        return None
+    return {
+        "id": str(row["id"]),
+        "username": row["username"],
+        "is_admin": bool(row["is_admin"]),
+    }
+
+
+def revoke_auth_session(token: str | None) -> None:
+    if not token:
+        return
+    with tx() as conn:
+        exec_(
+            conn,
+            "delete from public.auth_sessions where token_hash = :token_hash",
+            token_hash=_token_hash(token),
+        )
+
+
 def _secret(name: str, default: str = "") -> str:
     """st.secrets raises when no secrets.toml exists — never let that crash the app."""
     import os
@@ -511,6 +605,9 @@ def login_user(username: str, password: str) -> tuple[bool, str]:
         "username": row["username"],
         "is_admin": bool(row["is_admin"]),
     }
+    token = create_auth_session(str(row["id"]))
+    st.session_state.auth_token = token
+    st.session_state.auth_cookie_to_set = token
     refresh_data()
     return True, ""
 
@@ -537,6 +634,7 @@ def auth_screen() -> None:
     )
 
     tab_in, tab_up = st.tabs(["Enter the league", "Join with a code"])
+    st.caption("Sign in once on this device; Fourth Down remembers you securely for 30 days.")
 
     with tab_in:
         with st.form("login_form"):
@@ -561,7 +659,14 @@ def auth_screen() -> None:
                     st.error("Passwords don't match.")
                 else:
                     ok, msg = register_user(u, p, code)
-                    (st.success if ok else st.error)(msg)
+                    if ok:
+                        login_ok, login_msg = login_user(u, p)
+                        if login_ok:
+                            st.rerun()
+                        else:
+                            st.error(login_msg)
+                    else:
+                        st.error(msg)
 
 
 # =====================================================================
@@ -649,8 +754,6 @@ def place_bet(
             )
     except IntegrityError as exc:
         msg = str(exc.orig) if getattr(exc, "orig", None) else str(exc)
-        if "bets_one_open_per_market" in msg:
-            return False, "You already have an open ticket on that market."
         if "users_balance_nonneg" in msg:
             return False, "That wager would overdraw your bankroll."
         return False, "Bet rejected by the database."
@@ -864,7 +967,7 @@ def _render_game_card(game: dict, options: list[tuple[str, Decimal, str]]) -> No
     site = "Neutral site" if game["neutral_site"] else (
         f"{game['away_conference'] or 'IND'} at {game['home_conference'] or 'IND'}"
     )
-    provider = escape(str(game["lines_provider"] or "Consensus"))
+    provider = escape(str(game["lines_provider"] or "DraftKings"))
     active = st.session_state.get("bet_selection", {})
 
     with st.container(border=True):
@@ -992,6 +1095,7 @@ def _render_bet_slip(user: dict, balance: Decimal, *, key_prefix: str = "") -> N
         else:
             st.error(msg)
 
+    st.caption("Tickets are final once placed. You can add another bet on this game at any time before kickoff.")
     st.markdown("<div class='fd-slip-footer'></div>", unsafe_allow_html=True)
 
 
@@ -1437,6 +1541,46 @@ def tab_leaderboard(user: dict) -> None:
 # Main
 # =====================================================================
 def main() -> None:
+    try:
+        ensure_runtime_schema()
+    except Exception as exc:  # noqa: BLE001
+        st.error(f"Database setup failed: {exc}")
+        st.stop()
+        return
+
+    cookie_manager = _cookie_manager()
+    pending_cookie = st.session_state.pop("auth_cookie_to_set", None)
+    if pending_cookie:
+        cookie_manager.set(
+            AUTH_COOKIE,
+            pending_cookie,
+            key=f"set_auth_{_token_hash(pending_cookie)[:12]}",
+            expires_at=datetime.now(timezone.utc) + timedelta(days=AUTH_SESSION_DAYS),
+            secure=True,
+            same_site="strict",
+        )
+
+    if "user" not in st.session_state:
+        browser_token = cookie_manager.get(AUTH_COOKIE)
+        if browser_token:
+            try:
+                restored = restore_auth_session(browser_token)
+            except Exception as exc:  # noqa: BLE001
+                st.error(f"Could not restore your session: {exc}")
+                restored = None
+            if restored:
+                st.session_state.user = restored
+                st.session_state.auth_token = browser_token
+                refresh_data()
+            else:
+                try:
+                    cookie_manager.delete(
+                        AUTH_COOKIE,
+                        key=f"delete_stale_{_token_hash(browser_token)[:12]}",
+                    )
+                except Exception:
+                    pass
+
     if "user" not in st.session_state:
         auth_screen()
         return
@@ -1485,6 +1629,15 @@ def main() -> None:
             st.rerun()
     with signout_col:
         if st.button("Sign out", width="stretch"):
+            token = st.session_state.pop("auth_token", None) or cookie_manager.get(AUTH_COOKIE)
+            try:
+                revoke_auth_session(token)
+            finally:
+                if token:
+                    cookie_manager.delete(
+                        AUTH_COOKIE,
+                        key=f"delete_auth_{_token_hash(token)[:12]}",
+                    )
             st.session_state.pop("user", None)
             st.session_state.pop("bet_selection", None)
             refresh_data()

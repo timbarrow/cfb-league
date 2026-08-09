@@ -4,8 +4,9 @@ A mobile-first, fake-money betting league for ~10 people. Everyone starts with
 **$10,000**, bets spreads and totals at **even money (2.00× return, no vig)**, and the
 leaderboard ranks players by net worth. Every ticket in the league is public.
 
-Runs for **$0/month**: Streamlit Community Cloud + Supabase free tier +
-College Football Data API + GitHub Actions.
+The app infrastructure runs for **$0/month** on Streamlit Community Cloud,
+Supabase's free tier and public-repository GitHub Actions. Live scores require
+a College Football Data **Tier 1** membership.
 
 ---
 
@@ -20,7 +21,7 @@ College Football Data API + GitHub Actions.
 | `app.py` | The Streamlit UI (3 tabs) |
 | `test_settlement.py` | Grading + payout math tests (no DB needed) |
 | `integration_check.py` | End-to-end test against a scratch Postgres |
-| `.github/workflows/cfb-pipeline.yml` | Hourly sync + settle cron |
+| `.github/workflows/cfb-pipeline.yml` | Central-time line, live-score and settlement schedule |
 
 ---
 
@@ -83,6 +84,33 @@ where g.start_date > now() and g.status = 'scheduled'
 Kickoff is re-checked inside the bet transaction, so a game can't be bet after
 it starts even if the page was left open.
 
+### Lines and live results
+
+- The board refreshes once daily at **8:07 AM Central** and accepts
+  **DraftKings only**. A missing DraftKings market stays unavailable rather
+  than silently switching books.
+- Mon–Wed results refresh at **8 PM, 10 PM and 11:59 PM Central**.
+- Thu–Fri live results refresh about every seven minutes from **8 PM through
+  midnight**.
+- Saturday live results refresh about every seven minutes from **11 AM through
+  Sunday at 2 AM**, followed by a **Sunday 6 AM** sweep.
+- Live runs use CFBD's Tier 1 `/scoreboard` endpoint in one API call, then grade
+  completed tickets immediately.
+
+GitHub's scheduler can start a job a few minutes late. Also, `*/7` produces
+`:00, :07, … :56`, followed by the next hour's `:00`, so the hour boundary is a
+four-minute interval.
+
+### Tickets and sign-in
+
+Tickets are immutable once placed: there is no cancel or rescind operation.
+Players can place any number of separate tickets on the same game and market,
+whether the line moved or remained unchanged.
+
+After a successful sign-in (or new-account signup), the browser receives a
+random 30-day session token. The database stores only its SHA-256 hash—not the
+password or raw token. Signing out revokes the session immediately.
+
 ### Betting math
 
 `spread_home` is the home team's line (negative = home favored); `spread_away`
@@ -143,29 +171,31 @@ streamlit run app.py
 
 ```bash
 python test_settlement.py     # grading + payout edge cases, no DB
+python -m pytest -q test_sync.py  # DraftKings + live-score shaping, no DB
 
 # End-to-end against a THROWAWAY database (it drops and recreates the tables):
 DATABASE_URL=postgresql://... python integration_check.py
 ```
 
 `integration_check.py` covers signup, the kickoff lock, the balance guard,
-stale-line rejection, duplicate-ticket protection, win/loss/push settlement,
+stale-line rejection, repeat tickets, win/loss/push settlement,
 re-settlement idempotency, and the leaderboard totals.
 
 ## Manual operations
 
 ```bash
 python cfb_sync.py --season 2026 --week 7 --season-type regular
+python cfb_sync.py --live            # Tier 1 score-only refresh
 python settle_bets.py --dry-run     # grade everything, write nothing
 ```
 
 ## Cost
 
-| Service | Free tier | This app's usage |
+| Service | Plan | This app's usage |
 |---|---|---|
 | Streamlit Community Cloud | unlimited public apps | 1 app, ~10 users |
 | Supabase | 500 MB DB | a few MB per season |
-| CFBD API | free key | ~4 calls per run |
+| CFBD API | Tier 1 (5,000 calls/month) | ~1,100 calls in a busy month |
 | GitHub Actions (**public repo**) | unlimited minutes | **$0** |
 | GitHub Actions (private repo) | 2,000 min/mo on Free | see below |
 
@@ -174,21 +204,14 @@ allowance is consumed. Keep the repo public unless you have a reason not to;
 none of the secrets live in the code.
 
 On a **private** repo, minutes are billed and GitHub rounds every job up to the
-nearest minute. The season-aware schedule in `cfb-pipeline.yml` fires roughly
-2,200 times per season (~150 runs/month averaged over a year), which is about
-**2,200–3,300 minutes per season** — comfortably inside a 2,000 min/month
-allowance, and about $13–20/season at the $0.006/min Linux overage rate if you
-had no allowance left at all.
-
-To cut it further, delete the hourly weekend `cron` line and keep only the
-every-6-hours one (~600 runs/season).
+nearest minute. This live schedule produces roughly 5,000–6,000 short runs over
+an August–January season. The included public repository therefore matters:
+its GitHub Actions cost remains **$0**.
 
 ## Notes
 
 - Play money only. This is a private league scoreboard, not a sportsbook.
 - Passwords use PBKDF2-SHA256 (240k rounds, per-user salt) from the standard
   library — no native wheels needed on Streamlit Cloud.
-- Odds provider preference is configurable via `CFBD_PROVIDERS`; a book that
-  quotes both a spread and a total is always preferred.
-- Want to allow adding to an open position? Drop the
-  `bets_one_open_per_market` index.
+- DraftKings is the only accepted odds provider. `CFBD_PROVIDER` exists solely
+  as a development/testing override.

@@ -96,11 +96,23 @@ create index if not exists bets_user_idx    on public.bets (user_id, created_at 
 create index if not exists bets_game_idx    on public.bets (game_id);
 create index if not exists bets_pending_idx on public.bets (status) where status = 'pending';
 
--- Guards against double-submit on flaky mobile connections: one OPEN ticket
--- per user per market per game. (Drop this index if you want to allow
--- adding to an existing position.)
-create unique index if not exists bets_one_open_per_market
-    on public.bets (user_id, game_id, bet_type) where status = 'pending';
+-- Players may add to the same side or market as often as they choose. Each
+-- insert is an immutable ticket at the line shown at that moment.
+drop index if exists public.bets_one_open_per_market;
+
+-- ---------------------------------------------------------------------
+-- persistent browser sessions (the browser stores only a random token)
+-- ---------------------------------------------------------------------
+create table if not exists public.auth_sessions (
+    token_hash   char(64) primary key,
+    user_id      uuid not null references public.users (id) on delete cascade,
+    created_at   timestamptz not null default now(),
+    expires_at   timestamptz not null,
+    last_seen_at timestamptz not null default now()
+);
+
+create index if not exists auth_sessions_expires_idx
+    on public.auth_sessions (expires_at);
 
 -- ---------------------------------------------------------------------
 -- Convenience view: leaderboard by net worth

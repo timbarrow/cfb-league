@@ -3,12 +3,13 @@ cfb_sync.py — College Football Data -> Supabase pipeline.
 
 Responsibilities
   1. Work out the *upcoming* game week (season, season_type, week).
-  2. Pull /games, /lines and /rankings for that week.
+  2. Pull /games, DraftKings-only /lines and /rankings for that week.
   3. Also refresh the PREVIOUS week so final scores land and bets can settle.
   4. Upsert everything into public.games without ever clobbering good data
      with nulls.
 
-Run:  python cfb_sync.py            (env: CFBD_API_KEY, DATABASE_URL)
+Run:  python cfb_sync.py            (daily board refresh)
+      python cfb_sync.py --live     (Tier 1 live/final scoreboard refresh)
       python cfb_sync.py --week 6 --season 2026 --season-type regular
 """
 
@@ -36,14 +37,9 @@ log = logging.getLogger("cfb_sync")
 API_BASE = os.getenv("CFBD_API_BASE", "https://api.collegefootballdata.com").rstrip("/")
 API_KEY = os.getenv("CFBD_API_KEY", "").strip()
 
-# Preference order for sportsbook lines. First provider present wins.
-PROVIDER_PRIORITY = [
-    p.strip().lower()
-    for p in os.getenv(
-        "CFBD_PROVIDERS", "DraftKings,Bovada,ESPN Bet,consensus,teamrankings,numberfire"
-    ).split(",")
-    if p.strip()
-]
+# One book, one source of truth. The environment hook is useful for local
+# testing, but production intentionally defaults to DraftKings only.
+LINES_PROVIDER = os.getenv("CFBD_PROVIDER", "DraftKings").strip() or "DraftKings"
 
 RANKING_POLL = os.getenv("CFBD_POLL", "AP Top 25")
 
@@ -263,26 +259,21 @@ def fetch_lines(season: int, season_type: str, week: int) -> dict[int, dict]:
         if gid is None:
             continue
         books = pick(row, "lines", default=[]) or []
-        best: tuple[int, dict] | None = None
         for book in books:
             provider = (pick(book, "provider", default="") or "").strip()
+            if provider.casefold() != LINES_PROVIDER.casefold():
+                continue
             spread = to_float(pick(book, "spread"))
             total = to_float(pick(book, "overUnder", "over_under", "overunder"))
             if spread is None and total is None:
                 continue
-            try:
-                score = PROVIDER_PRIORITY.index(provider.lower())
-            except ValueError:
-                score = len(PROVIDER_PRIORITY) + 1
-            # Prefer a book that quotes BOTH markets.
-            if spread is None or total is None:
-                score += 100
-            cand = {"spread_home": spread, "total_line": total, "provider": provider}
-            if best is None or score < best[0]:
-                best = (score, cand)
-        if best:
-            out[gid] = best[1]
-    log.info("Loaded odds for %d games.", len(out))
+            out[gid] = {
+                "spread_home": spread,
+                "total_line": total,
+                "provider": LINES_PROVIDER,
+            }
+            break
+    log.info("Loaded %s odds for %d games.", LINES_PROVIDER, len(out))
     return out
 
 
@@ -295,6 +286,8 @@ def shape_rows(
     lines: dict[int, dict],
     ranks: dict[str, int],
     now: datetime,
+    *,
+    replace_odds: bool = False,
 ) -> list[dict]:
     rows: list[dict] = []
     for g in raw_games:
@@ -335,6 +328,7 @@ def shape_rows(
                 "spread_home": odds.get("spread_home"),
                 "total_line": odds.get("total_line"),
                 "lines_provider": odds.get("provider"),
+                "replace_odds": replace_odds,
                 "status": status,
                 "home_score": home_score,
                 "away_score": away_score,
@@ -371,10 +365,14 @@ on conflict (id) do update set
     -- ranks are intentionally overwritable with NULL (teams drop out of the poll)
     home_rank       = excluded.home_rank,
     away_rank       = excluded.away_rank,
-    -- never blank an existing line just because a book pulled it
-    spread_home     = coalesce(excluded.spread_home, public.games.spread_home),
-    total_line      = coalesce(excluded.total_line,  public.games.total_line),
-    lines_provider  = coalesce(excluded.lines_provider, public.games.lines_provider),
+    -- A daily book refresh replaces the market, including clearing stale
+    -- non-DraftKings lines. Score-only refreshes preserve the last daily line.
+    spread_home     = case when :replace_odds then excluded.spread_home
+                           else coalesce(excluded.spread_home, public.games.spread_home) end,
+    total_line      = case when :replace_odds then excluded.total_line
+                           else coalesce(excluded.total_line, public.games.total_line) end,
+    lines_provider  = case when :replace_odds then excluded.lines_provider
+                           else coalesce(excluded.lines_provider, public.games.lines_provider) end,
     home_score      = coalesce(excluded.home_score, public.games.home_score),
     away_score      = coalesce(excluded.away_score, public.games.away_score),
     -- status only moves forward: scheduled -> in_progress -> completed
@@ -415,10 +413,77 @@ def sync_week(season: int, season_type: str, week: int, now: datetime, with_odds
         return 0
     lines = fetch_lines(season, season_type, week) if with_odds else {}
     ranks = fetch_rankings(season, season_type, week)
-    rows = shape_rows(raw, lines, ranks, now)
+    rows = shape_rows(raw, lines, ranks, now, replace_odds=with_odds)
     n = upsert_games(rows)
     log.info("Upserted %d games for %s %s week %s.", n, season, season_type, week)
     return n
+
+
+def _live_status(game: dict) -> str:
+    """Normalize the scoreboard's shifting status vocabulary."""
+    raw = str(pick(game, "status", default="") or "").strip().casefold()
+    if "final" in raw or "complete" in raw or raw == "post":
+        return "completed"
+    if any(word in raw for word in ("progress", "live", "halftime", "delay")):
+        return "in_progress"
+    period = to_int(pick(game, "period", default=0)) or 0
+    return "in_progress" if period > 0 else "scheduled"
+
+
+def shape_live_rows(payload: Iterable[dict]) -> list[dict]:
+    """Shape Tier 1 /scoreboard rows for score-only updates."""
+    rows: list[dict] = []
+    for game in payload:
+        gid = to_int(pick(game, "id", "gameId", "game_id"))
+        home = pick(game, "homeTeam", "home_team", default={}) or {}
+        away = pick(game, "awayTeam", "away_team", default={}) or {}
+        home_score = to_int(pick(home, "points", "score"))
+        away_score = to_int(pick(away, "points", "score"))
+        status = _live_status(game)
+        if gid is None:
+            continue
+        if status == "completed" and (home_score is None or away_score is None):
+            status = "in_progress"
+        rows.append(
+            {
+                "id": gid,
+                "status": status,
+                "home_score": home_score,
+                "away_score": away_score,
+            }
+        )
+    return rows
+
+
+LIVE_UPDATE_SQL = """
+update public.games
+   set home_score = coalesce(:home_score, home_score),
+       away_score = coalesce(:away_score, away_score),
+       status = case
+           when status = 'completed' then 'completed'
+           when :status = 'completed' then 'completed'
+           when :status = 'in_progress' then 'in_progress'
+           else status
+       end,
+       updated_at = now()
+ where id = :id
+"""
+
+
+def sync_live_scoreboard() -> int:
+    """Refresh live/final scores in one Tier 1 API call."""
+    log.info("Refreshing the CFBD live scoreboard ...")
+    rows = shape_live_rows(api_get("scoreboard", classification="fbs"))
+    written = 0
+    with tx() as conn:
+        if not try_advisory_lock(conn, LOCK_SYNC):
+            log.warning("Another sync holds the lock; exiting cleanly.")
+            return 0
+        for row in rows:
+            result = exec_(conn, LIVE_UPDATE_SQL, **row)
+            written += max(result.rowcount or 0, 0)
+    log.info("Updated %d loaded games from the live scoreboard.", written)
+    return written
 
 
 def main(argv: list[str] | None = None) -> int:
@@ -427,9 +492,18 @@ def main(argv: list[str] | None = None) -> int:
     ap.add_argument("--week", type=int)
     ap.add_argument("--season-type", choices=["regular", "postseason"])
     ap.add_argument("--no-prev", action="store_true", help="Skip refreshing the prior week.")
+    ap.add_argument(
+        "--live",
+        action="store_true",
+        help="Use the Tier 1 scoreboard for a one-call live/final score refresh.",
+    )
     args = ap.parse_args(argv)
 
     now = datetime.now(timezone.utc)
+
+    if args.live:
+        sync_live_scoreboard()
+        return 0
 
     if args.week and args.season:
         target = (args.season, args.season_type or "regular", args.week)
