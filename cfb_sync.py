@@ -3,7 +3,7 @@ cfb_sync.py — College Football Data -> Supabase pipeline.
 
 Responsibilities
   1. Work out the *upcoming* game week (season, season_type, week).
-  2. Pull /games, DraftKings-only /lines and /rankings for that week.
+  2. Pull /games, DraftKings-first /lines and /rankings for that week.
   3. Also refresh the PREVIOUS week so final scores land and bets can settle.
   4. Upsert everything into public.games without ever clobbering good data
      with nulls.
@@ -37,9 +37,13 @@ log = logging.getLogger("cfb_sync")
 API_BASE = os.getenv("CFBD_API_BASE", "https://api.collegefootballdata.com").rstrip("/")
 API_KEY = os.getenv("CFBD_API_KEY", "").strip()
 
-# One book, one source of truth. The environment hook is useful for local
-# testing, but production intentionally defaults to DraftKings only.
+# DraftKings remains the source of truth whenever it has the requested market.
+# Bovada fills only a missing spread or total so the opening-week board does not
+# disappear while DraftKings is still posting its early lines.
 LINES_PROVIDER = os.getenv("CFBD_PROVIDER", "DraftKings").strip() or "DraftKings"
+LINES_FALLBACK_PROVIDER = (
+    os.getenv("CFBD_FALLBACK_PROVIDER", "Bovada").strip() or "Bovada"
+)
 
 RANKING_POLL = os.getenv("CFBD_POLL", "AP Top 25")
 
@@ -252,35 +256,93 @@ def fetch_rankings(season: int, season_type: str, week: int) -> dict[str, int]:
     return ranks
 
 
+def _book_by_name(books: Iterable[dict], name: str) -> dict:
+    wanted = name.casefold()
+    return next(
+        (
+            book
+            for book in books
+            if str(pick(book, "provider", default="") or "").strip().casefold()
+            == wanted
+        ),
+        {},
+    )
+
+
+def _provider_label(spread_source: str | None, total_source: str | None) -> str | None:
+    if not spread_source and not total_source:
+        return None
+    if spread_source == total_source:
+        suffix = " backup" if spread_source == LINES_FALLBACK_PROVIDER else ""
+        return f"{spread_source}{suffix}"
+    pieces = []
+    if spread_source:
+        pieces.append(f"Spread: {spread_source}")
+    if total_source:
+        pieces.append(f"Total: {total_source}")
+    return " · ".join(pieces)
+
+
 def fetch_lines(season: int, season_type: str, week: int) -> dict[int, dict]:
-    """game_id -> {'spread_home': float|None, 'total_line': float|None, 'provider': str}"""
+    """Return one board per game, preferring DraftKings market by market."""
     try:
         payload = api_get("lines", year=season, week=week, seasonType=season_type)
     except RuntimeError as exc:
         # A failed provider request must never erase yesterday's valid board.
-        raise RuntimeError(f"DraftKings line refresh failed; existing lines preserved: {exc}") from exc
+        raise RuntimeError(f"Odds refresh failed; existing lines preserved: {exc}") from exc
 
     out: dict[int, dict] = {}
+    coverage = {"primary_only": 0, "mixed": 0, "fallback_only": 0}
     for row in payload:
         gid = to_int(pick(row, "id", "gameId", "game_id"))
         if gid is None:
             continue
         books = pick(row, "lines", default=[]) or []
-        for book in books:
-            provider = (pick(book, "provider", default="") or "").strip()
-            if provider.casefold() != LINES_PROVIDER.casefold():
-                continue
-            spread = to_float(pick(book, "spread"))
-            total = to_float(pick(book, "overUnder", "over_under", "overunder"))
-            if spread is None and total is None:
-                continue
-            out[gid] = {
-                "spread_home": spread,
-                "total_line": total,
-                "provider": LINES_PROVIDER,
-            }
-            break
-    log.info("Loaded %s odds for %d games.", LINES_PROVIDER, len(out))
+        primary = _book_by_name(books, LINES_PROVIDER)
+        fallback = _book_by_name(books, LINES_FALLBACK_PROVIDER)
+
+        primary_spread = to_float(pick(primary, "spread"))
+        primary_total = to_float(
+            pick(primary, "overUnder", "over_under", "overunder")
+        )
+        fallback_spread = to_float(pick(fallback, "spread"))
+        fallback_total = to_float(
+            pick(fallback, "overUnder", "over_under", "overunder")
+        )
+
+        spread = primary_spread if primary_spread is not None else fallback_spread
+        total = primary_total if primary_total is not None else fallback_total
+        if spread is None and total is None:
+            continue
+
+        spread_source = (
+            LINES_PROVIDER if primary_spread is not None else LINES_FALLBACK_PROVIDER
+        ) if spread is not None else None
+        total_source = (
+            LINES_PROVIDER if primary_total is not None else LINES_FALLBACK_PROVIDER
+        ) if total is not None else None
+        sources = {source for source in (spread_source, total_source) if source}
+        if sources == {LINES_PROVIDER}:
+            coverage["primary_only"] += 1
+        elif sources == {LINES_FALLBACK_PROVIDER}:
+            coverage["fallback_only"] += 1
+        else:
+            coverage["mixed"] += 1
+
+        out[gid] = {
+            "spread_home": spread,
+            "total_line": total,
+            "provider": _provider_label(spread_source, total_source),
+        }
+    log.info(
+        "Loaded odds for %d games: %d %s-only, %d mixed, %d %s-only.",
+        len(out),
+        coverage["primary_only"],
+        LINES_PROVIDER,
+        coverage["mixed"],
+        coverage["fallback_only"],
+        LINES_FALLBACK_PROVIDER,
+    )
     return out
 
 
@@ -376,7 +438,7 @@ on conflict (id) do update set
     home_rank       = excluded.home_rank,
     away_rank       = excluded.away_rank,
     -- A daily book refresh replaces the market, including clearing stale
-    -- non-DraftKings lines. Score-only refreshes preserve the last daily line.
+    -- stale lines. Score-only refreshes preserve the last daily board.
     spread_home     = case when :replace_odds then excluded.spread_home
                            else coalesce(excluded.spread_home, public.games.spread_home) end,
     total_line      = case when :replace_odds then excluded.total_line

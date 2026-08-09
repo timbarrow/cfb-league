@@ -87,9 +87,9 @@ it starts even if the page was left open.
 
 ### Lines and live results
 
-- The board refreshes once daily at **8:07 AM Central** and accepts
-  **DraftKings only**. A missing DraftKings market stays unavailable rather
-  than silently switching books.
+- The board refreshes once daily at **8:07 AM Central**. Each market uses
+  **DraftKings first**, then fills only a missing spread or total from
+  **Bovada**. The game card labels the source whenever the books are mixed.
 - Mon–Wed results refresh at **8 PM, 10 PM and 11:59 PM Central**.
 - Thu–Fri live results refresh about every seven minutes from **8 PM through
   midnight**.
@@ -114,7 +114,7 @@ password or raw token. Signing out revokes the session immediately.
 
 Open tickets refresh automatically while the app is open. When CFBD posts a
 score they change to **LIVE**, then **FINAL · GRADING**, and finally the settled
-win/loss/push receipt. The board and header also show when DraftKings lines and
+win/loss/push receipt. The board and header also show when odds and
 scores were last refreshed.
 
 ### Weekly league experience
@@ -229,5 +229,6 @@ its GitHub Actions cost remains **$0**.
 - Play money only. This is a private league scoreboard, not a sportsbook.
 - Passwords use PBKDF2-SHA256 (240k rounds, per-user salt) from the standard
   library — no native wheels needed on Streamlit Cloud.
-- DraftKings is the only accepted odds provider. `CFBD_PROVIDER` exists solely
-  as a development/testing override.
+- DraftKings is the primary odds provider. `CFBD_PROVIDER` can override it and
+  `CFBD_FALLBACK_PROVIDER` controls the market-by-market backup (Bovada by
+  default).

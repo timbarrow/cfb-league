@@ -397,14 +397,14 @@ def render_data_health(status: dict) -> None:
     st.markdown(
         f"""
         <div class="fd-data-health">
-            <span class="{line_state}"><i></i>DraftKings board · {_freshness_label(lines_at)}</span>
+            <span class="{line_state}"><i></i>Odds board · {_freshness_label(lines_at)}</span>
             <span class="{score_state}"><i></i>{escape(score_copy)}</span>
         </div>
         """,
         unsafe_allow_html=True,
     )
     if line_state == "warning" and lines_at is not None:
-        st.warning("The daily DraftKings board is older than expected. Existing tickets are safe; new bets should wait for the next refresh.")
+        st.warning("The daily odds board is older than expected. Existing tickets are safe; new bets should wait for the next refresh.")
     if score_state == "warning":
         st.warning("A live score check is overdue. Tickets will remain open until an official final is posted.")
 
@@ -1338,7 +1338,7 @@ def tab_place_bets(user: dict, balance: Decimal) -> None:
     st.markdown(
         f"""
         <div class="fd-trust-strip">
-            <span><b>Book</b> DraftKings only</span>
+            <span><b>Books</b> DraftKings first · Bovada backup</span>
             <span><b>Board set</b> {escape(_freshness_label(latest_line_update))}</span>
             <span><b>Rules</b> 2.00× · Tickets final</span>
         </div>
