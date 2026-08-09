@@ -13,6 +13,7 @@ from __future__ import annotations
 from datetime import datetime, timezone
 from decimal import ROUND_HALF_UP, Decimal
 from html import escape
+from pathlib import Path
 
 import pandas as pd
 import streamlit as st
@@ -32,7 +33,7 @@ from db import (
 try:
     from zoneinfo import ZoneInfo
 
-    LOCAL_TZ = ZoneInfo("America/New_York")
+    LOCAL_TZ = ZoneInfo("America/Chicago")
 except Exception:  # pragma: no cover - tzdata missing
     LOCAL_TZ = timezone.utc
 
@@ -250,6 +251,13 @@ div[role="radiogroup"] > label p { color:var(--chalk); font-weight:650; }
     unsafe_allow_html=True,
 )
 
+# The approved Saturday Desk visual system lives separately so the interface
+# can evolve without obscuring the betting and settlement logic below.
+st.markdown(
+    f"<style>{Path(__file__).with_name('saturday_desk.css').read_text(encoding='utf-8')}</style>",
+    unsafe_allow_html=True,
+)
+
 
 # =====================================================================
 # Formatting helpers
@@ -289,7 +297,7 @@ def _safe_kickoff(dt: datetime) -> str:
     local = dt.astimezone(LOCAL_TZ)
     hour = local.hour % 12 or 12
     ampm = "AM" if local.hour < 12 else "PM"
-    return f"{local:%a %b} {local.day} · {hour}:{local:%M} {ampm} ET"
+    return f"{local:%a %b} {local.day} · {hour}:{local:%M} {ampm} CT"
 
 
 BET_LABEL = {
@@ -474,15 +482,19 @@ def login_user(username: str, password: str) -> tuple[bool, str]:
 def auth_screen() -> None:
     st.markdown(
         """
-        <section class="auth-hero">
-            <div class="eyebrow">Private league · Saturdays only</div>
-            <div class="auth-title">Own the<br>board.</div>
-            <div class="auth-copy">Call your shots, track every ticket, and take the top spot in a season-long college football league built for bragging rights.</div>
-            <div class="hero-proof">
-                <span>$10K starting stack</span>
-                <span>Live weekly lines</span>
-                <span>Full transparency</span>
+        <div class="fd-scorebar">
+            <div class="fd-brand"><span class="fd-ball">4D</span><span>Fourth Down</span></div>
+            <div class="fd-readout fd-week"><span>League</span><strong>Private</strong></div>
+            <div class="fd-readout fd-kickoff-readout"><span>Season</span><strong>2026</strong></div>
+            <div class="fd-readout"><span>Starting stack</span><strong>$10,000</strong></div>
+        </div>
+        <section class="fd-auth-card">
+            <div class="fd-auth-copy">
+                <small>Saturday credentials</small>
+                <h1>Call your shots.</h1>
+                <p>One bankroll. Every weekly line. A full season of receipts and bragging rights.</p>
             </div>
+            <div class="fd-auth-pass"><span>League access</span><strong>WEEK 01</strong></div>
         </section>
         """,
         unsafe_allow_html=True,
@@ -631,7 +643,7 @@ def market_options(game: dict, bet_filter: str) -> list[tuple[str, Decimal, str]
     return opts
 
 
-def tab_place_bets(user: dict, balance: Decimal) -> None:
+def _legacy_tab_place_bets(user: dict, balance: Decimal) -> None:
     games = load_upcoming_games()
 
     if not games:
@@ -780,6 +792,249 @@ def tab_place_bets(user: dict, balance: Decimal) -> None:
                             st.error(msg)
 
 
+def _kickoff_tape(dt: datetime) -> tuple[str, str, str]:
+    """Compact day, time, zone pieces for the yellow kickoff tape."""
+    if dt is None:
+        return "TBD", "—", "CT"
+    if dt.tzinfo is None:
+        dt = dt.replace(tzinfo=timezone.utc)
+    local = dt.astimezone(LOCAL_TZ)
+    hour = local.hour % 12 or 12
+    ampm = "AM" if local.hour < 12 else "PM"
+    return f"{local:%a} {local.day}", f"{hour}:{local:%M}", f"{ampm} CT"
+
+
+def _choose_market(game: dict, option: tuple[str, Decimal, str]) -> None:
+    bet_type, line, label = option
+    separator = "vs" if game["neutral_site"] else "at"
+    st.session_state.bet_selection = {
+        "game_id": int(game["id"]),
+        "bet_type": bet_type,
+        "line": str(line),
+        "label": label,
+        "matchup": f"{game['away_team']} {separator} {game['home_team']}",
+        "kickoff": _safe_kickoff(game["start_date"]),
+    }
+
+
+def _set_slip_wager(amount: int) -> None:
+    st.session_state.slip_wager = float(amount)
+
+
+def _render_game_card(game: dict, options: list[tuple[str, Decimal, str]]) -> None:
+    day, clock, zone = _kickoff_tape(game["start_date"])
+    separator = "VS" if game["neutral_site"] else "AT"
+    site = "Neutral site" if game["neutral_site"] else (
+        f"{game['away_conference'] or 'IND'} at {game['home_conference'] or 'IND'}"
+    )
+    provider = escape(str(game["lines_provider"] or "Consensus"))
+    active = st.session_state.get("bet_selection", {})
+
+    with st.container(border=True):
+        st.markdown(
+            f"""
+            <div class="fd-game-top">
+                <div class="fd-kickoff"><span>{escape(day)}</span><strong>{escape(clock)}</strong><span>{escape(zone)}</span></div>
+                <div class="fd-game-info">
+                    <div class="fd-game-meta"><span>{escape(site)}</span><span>{provider} · latest line</span></div>
+                    <div class="matchup">
+                        <span>{rank_html(game['away_rank'])}{escape(game['away_team'])}</span>
+                        <span class="versus">{separator}</span>
+                        <span>{rank_html(game['home_rank'])}{escape(game['home_team'])}</span>
+                    </div>
+                </div>
+            </div>
+            """,
+            unsafe_allow_html=True,
+        )
+
+        market_cols = st.columns(len(options))
+        for col, option in zip(market_cols, options, strict=True):
+            bet_type, _line, label = option
+            is_active = (
+                int(active.get("game_id", -1)) == int(game["id"])
+                and active.get("bet_type") == bet_type
+            )
+            with col:
+                if st.button(
+                    label,
+                    key=f"market_{game['id']}_{bet_type}",
+                    type="primary" if is_active else "secondary",
+                    width="stretch",
+                ):
+                    _choose_market(game, option)
+                    st.rerun()
+
+
+def _render_bet_slip(user: dict, balance: Decimal) -> None:
+    flash = st.session_state.pop("bet_flash", None)
+    if flash:
+        st.success(flash)
+
+    selection = st.session_state.get("bet_selection")
+    if not selection:
+        st.markdown(
+            """
+            <div class="fd-slip-card">
+                <div class="fd-slip-pick">Your slip is open</div>
+                <div class="fd-slip-empty">Choose any spread or total from the Saturday card. Your pick and potential return will appear here.</div>
+            </div>
+            <div class="fd-slip-footer"></div>
+            """,
+            unsafe_allow_html=True,
+        )
+        return
+
+    st.markdown(
+        f"""
+        <div class="fd-slip-card">
+            <div class="fd-slip-pick">{escape(str(selection['label']))}</div>
+            <div class="fd-slip-game">{escape(str(selection['matchup']))} · {escape(str(selection['kickoff']))}</div>
+        </div>
+        """,
+        unsafe_allow_html=True,
+    )
+
+    max_wager = float(max(balance, Decimal("1.00")))
+    default_wager = 100.0 if balance >= 100 else max_wager
+    current = float(st.session_state.get("slip_wager", default_wager))
+    if "slip_wager" not in st.session_state or current > max_wager or current < 1:
+        st.session_state.slip_wager = default_wager
+
+    wager = st.number_input(
+        "Stake ($)",
+        min_value=1.0,
+        max_value=max_wager,
+        step=25.0,
+        key="slip_wager",
+    )
+
+    quick_cols = st.columns(3)
+    for col, amount in zip(quick_cols, (50, 100, 250), strict=True):
+        with col:
+            st.button(
+                f"${amount}",
+                key=f"quick_stake_{amount}",
+                disabled=balance < amount,
+                width="stretch",
+                on_click=_set_slip_wager,
+                args=(amount,),
+            )
+
+    stake = Decimal(str(wager))
+    total_return = money(stake * DEFAULT_MULTIPLIER)
+    to_win = total_return - money(stake)
+    st.markdown(
+        f"""
+        <div class="fd-slip-return">
+            <span>To win</span><strong>{fmt_money(to_win)}</strong>
+            <span>Total return</span><strong>{fmt_money(total_return)}</strong>
+        </div>
+        """,
+        unsafe_allow_html=True,
+    )
+
+    if st.button(
+        f"Place {selection['label']}",
+        key="place_selected_bet",
+        type="primary",
+        width="stretch",
+    ):
+        ok, msg = place_bet(
+            user["id"],
+            int(selection["game_id"]),
+            str(selection["bet_type"]),
+            Decimal(str(selection["line"])),
+            stake,
+        )
+        if ok:
+            st.session_state.pop("bet_selection", None)
+            st.session_state.bet_flash = msg
+            st.rerun()
+        else:
+            st.error(msg)
+
+    st.markdown("<div class='fd-slip-footer'></div>", unsafe_allow_html=True)
+
+
+def tab_place_bets(user: dict, balance: Decimal) -> None:
+    games = load_upcoming_games()
+    if not games:
+        st.info(
+            "No upcoming games are loaded. The next sync will add the weekly card "
+            "as soon as lines are available."
+        )
+        return
+
+    wk = games[0]
+    st.markdown(
+        f"""
+        <div class="fd-board-head">
+            <h2>Saturday card</h2>
+            <div class="fd-board-meta">Week {wk['week']} · {wk['season']} {escape(str(wk['season_type']))}<br>All times Central · Lines lock at kickoff</div>
+        </div>
+        """,
+        unsafe_allow_html=True,
+    )
+
+    conferences = sorted(
+        {c for game in games for c in (game["home_conference"], game["away_conference"]) if c}
+    )
+    with st.expander("Tune the card", expanded=False):
+        bet_filter = st.radio(
+            "Market",
+            ["All markets", "Spread (ATS)", "Over / Under"],
+            key="f_market",
+        )
+        conf_pick = st.multiselect(
+            "Conference", conferences, default=[], key="f_conf", placeholder="All conferences"
+        )
+        top25_only = st.toggle("Top 25 teams only", value=False, key="f_top25")
+        hide_bet = st.toggle("Hide games I've already bet", value=False, key="f_hide")
+        team_search = st.text_input("Search team", key="f_search", placeholder="e.g. Georgia")
+
+    my_bets = load_user_bets(user["id"])
+    bet_matchups = {
+        (bet["home_team"], bet["away_team"])
+        for bet in my_bets
+        if bet["status"] == "pending"
+    }
+    visible: list[dict] = []
+    for game in games:
+        if conf_pick and not (
+            game["home_conference"] in conf_pick or game["away_conference"] in conf_pick
+        ):
+            continue
+        if top25_only and not (game["home_rank"] or game["away_rank"]):
+            continue
+        if team_search:
+            needle = team_search.strip().lower()
+            if needle not in game["home_team"].lower() and needle not in game["away_team"].lower():
+                continue
+        if hide_bet and (game["home_team"], game["away_team"]) in bet_matchups:
+            continue
+        if not market_options(game, bet_filter):
+            continue
+        visible.append(game)
+
+    st.markdown(
+        f"<div class='fd-board-summary'>{len(visible)} of {len(games)} games · "
+        f"{fmt_money(balance)} available · Standard −110</div>",
+        unsafe_allow_html=True,
+    )
+
+    if not visible:
+        st.warning("No games match those filters. Open Tune the card and broaden the board.")
+        return
+
+    board_col, slip_col = st.columns([2.25, 1])
+    with board_col:
+        for game in visible:
+            _render_game_card(game, market_options(game, bet_filter))
+    with slip_col:
+        _render_bet_slip(user, balance)
+
+
 # =====================================================================
 # Tab 2 — My Tickets
 # =====================================================================
@@ -880,6 +1135,11 @@ def tab_my_tickets(user: dict, balance: Decimal) -> None:
     )
     net_worth = balance + open_stake
 
+    st.markdown(
+        "<div class='fd-view-head'><h2>My tickets</h2><p>Open positions and final receipts</p></div>",
+        unsafe_allow_html=True,
+    )
+
     c1, c2 = st.columns(2)
     c1.metric("Cash", fmt_money(balance))
     c2.metric("At risk", fmt_money(open_stake))
@@ -928,9 +1188,9 @@ def tab_leaderboard(user: dict) -> None:
     leader = board[0]
     st.markdown(
         f"""
-        <div class="board-hero">
-            <div><div class="eyebrow">Season standings</div><div class="board-title">The chase</div></div>
-            <div class="board-count">Leader · {escape(str(leader['username']))} · {fmt_money(leader['net_worth'])}</div>
+        <div class="fd-view-head">
+            <h2>League table</h2>
+            <p>Leader · {escape(str(leader['username']))} · {fmt_money(leader['net_worth'])}</p>
         </div>
         """,
         unsafe_allow_html=True,
@@ -1006,27 +1266,25 @@ def main() -> None:
         st.stop()
         return
 
-    head_l, head_m, head_r = st.columns([2.2, 1.2, .75])
-    with head_l:
-        st.markdown(
-            "<div class='topbar'><div class='brand-lockup'>"
-            "<div class='brand-mark'>4D</div><div>"
-            "<div class='brand-name'>Fourth Down</div>"
-            "<div class='brand-sub'>The Saturday league</div>"
-            "</div></div></div>",
-            unsafe_allow_html=True,
-        )
-    with head_m:
-        st.markdown(
-        f"<div class='user-chip'><strong>{escape(str(user['username']))}</strong>"
-            f"<span>{fmt_money(balance)} available</span></div>",
-            unsafe_allow_html=True,
-        )
-    with head_r:
-        if st.button("Sign out", width="stretch"):
-            st.session_state.pop("user", None)
-            refresh_data()
-            st.rerun()
+    try:
+        header_games = load_upcoming_games()
+        header_week = str(header_games[0]["week"]) if header_games else "—"
+        next_kickoff = _safe_kickoff(header_games[0]["start_date"]) if header_games else "Board pending"
+    except Exception:  # the tabs will show the actionable database error if needed
+        header_week = "—"
+        next_kickoff = "Board pending"
+
+    st.markdown(
+        f"""
+        <div class="fd-scorebar">
+            <div class="fd-brand"><span class="fd-ball">4D</span><span>Fourth Down</span></div>
+            <div class="fd-readout fd-week"><span>Week</span><strong>{escape(header_week)}</strong></div>
+            <div class="fd-readout fd-kickoff-readout"><span>Next kickoff</span><strong>{escape(next_kickoff)}</strong></div>
+            <div class="fd-readout"><span>{escape(str(user['username']))}</span><strong>{fmt_money(balance)}</strong></div>
+        </div>
+        """,
+        unsafe_allow_html=True,
+    )
 
     t1, t2, t3 = st.tabs(["The board", "My tickets", "Standings"])
     with t1:
@@ -1036,9 +1294,17 @@ def main() -> None:
     with t3:
         tab_leaderboard(user)
 
-    if st.button("↻ Refresh data", width="stretch"):
-        refresh_data()
-        st.rerun()
+    refresh_col, signout_col = st.columns([1, 1])
+    with refresh_col:
+        if st.button("↻ Refresh lines", width="stretch"):
+            refresh_data()
+            st.rerun()
+    with signout_col:
+        if st.button("Sign out", width="stretch"):
+            st.session_state.pop("user", None)
+            st.session_state.pop("bet_selection", None)
+            refresh_data()
+            st.rerun()
     st.markdown(
         "<div class='footer-note'>Play money only · Lines via College Football Data · "
         "Tickets settle automatically after the final</div>",
