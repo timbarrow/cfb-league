@@ -20,6 +20,7 @@ a College Football Data **Tier 1** membership.
 | `settle_bets.py` | Grades completed games and credits winnings |
 | `app.py` | The Streamlit UI (3 tabs) |
 | `test_settlement.py` | Grading + payout math tests (no DB needed) |
+| `test_experience.py` | Weekly recap, share-card and kickoff-window tests |
 | `integration_check.py` | End-to-end test against a scratch Postgres |
 | `.github/workflows/cfb-pipeline.yml` | Central-time line, live-score and settlement schedule |
 
@@ -101,7 +102,7 @@ GitHub's scheduler can start a job a few minutes late. Also, `*/7` produces
 `:00, :07, … :56`, followed by the next hour's `:00`, so the hour boundary is a
 four-minute interval.
 
-### Tickets and sign-in
+### Tickets, live results and sign-in
 
 Tickets are immutable once placed: there is no cancel or rescind operation.
 Players can place any number of separate tickets on the same game and market,
@@ -110,6 +111,20 @@ whether the line moved or remained unchanged.
 After a successful sign-in (or new-account signup), the browser receives a
 random 30-day session token. The database stores only its SHA-256 hash—not the
 password or raw token. Signing out revokes the session immediately.
+
+Open tickets refresh automatically while the app is open. When CFBD posts a
+score they change to **LIVE**, then **FINAL · GRADING**, and finally the settled
+win/loss/push receipt. The board and header also show when DraftKings lines and
+scores were last refreshed.
+
+### Weekly league experience
+
+- The standings dashboard starts at **Week 0** with every player at $10,000.
+- A season-tape chart tracks every player's weekly rank and net worth.
+- Each closed week publishes a recap with the weekly winner, biggest hit, bad
+  beat, most popular pick and biggest wager.
+- The recap generates a portrait PNG that can be shared from a phone or
+  downloaded for the group chat.
 
 ### Betting math
 
@@ -133,8 +148,8 @@ All money math uses `Decimal`, never floats.
 - **Bet placement** locks the bettor's `users` row (`SELECT … FOR UPDATE`),
   re-reads the game inside the same transaction, rejects the bet if the line
   moved between render and submit, and writes the ticket + debit atomically.
-- **Double-submit** on a flaky phone connection is blocked by a partial unique
-  index (`one open ticket per user per market per game`).
+- **Concurrent submissions** are serialized against the player's bankroll;
+  intentional repeat tickets on the same market remain allowed.
 - **Settlement** takes a transaction-level advisory lock, selects gradable bets
   `FOR UPDATE`, and guards every write with `status = 'pending'` — so running it
   twice credits nothing twice. Balances are updated once per user, not per bet.
@@ -172,6 +187,7 @@ streamlit run app.py
 ```bash
 python test_settlement.py     # grading + payout edge cases, no DB
 python -m pytest -q test_sync.py  # DraftKings + live-score shaping, no DB
+python -m pytest -q test_experience.py  # recap + share-card experience
 
 # End-to-end against a THROWAWAY database (it drops and recreates the tables):
 DATABASE_URL=postgresql://... python integration_check.py

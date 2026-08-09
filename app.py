@@ -10,17 +10,23 @@ Tabs
 
 from __future__ import annotations
 
+import base64
+import hashlib
+import json
+import secrets
+from collections import Counter, defaultdict
+from io import BytesIO
 from datetime import datetime, timedelta, timezone
 from decimal import ROUND_HALF_UP, Decimal
 from html import escape
 from pathlib import Path
-import hashlib
-import secrets
 
 import altair as alt
 import extra_streamlit_components as stx
 import pandas as pd
 import streamlit as st
+import streamlit.components.v1 as components
+from PIL import Image, ImageDraw, ImageFont
 from sqlalchemy.exc import IntegrityError
 
 from db import (
@@ -306,6 +312,103 @@ def _safe_kickoff(dt: datetime) -> str:
     return f"{local:%a %b} {local.day} · {hour}:{local:%M} {ampm} CT"
 
 
+def _as_local(dt: datetime | None) -> datetime | None:
+    if dt is None:
+        return None
+    if dt.tzinfo is None:
+        dt = dt.replace(tzinfo=timezone.utc)
+    return dt.astimezone(LOCAL_TZ)
+
+
+def _freshness_label(dt: datetime | None) -> str:
+    local = _as_local(dt)
+    if local is None:
+        return "Pending first refresh"
+    hour = local.hour % 12 or 12
+    ampm = "AM" if local.hour < 12 else "PM"
+    return f"{local:%a %b} {local.day} · {hour}:{local:%M} {ampm} CT"
+
+
+def _compact_update(dt: datetime | None) -> str:
+    local = _as_local(dt)
+    if local is None:
+        return "Daily line"
+    hour = local.hour % 12 or 12
+    ampm = "AM" if local.hour < 12 else "PM"
+    return f"Updated {hour}:{local:%M} {ampm} CT"
+
+
+def _kickoff_countdown(dt: datetime | None, now: datetime | None = None) -> str:
+    if dt is None:
+        return "Board pending"
+    current = now or datetime.now(timezone.utc)
+    if current.tzinfo is None:
+        current = current.replace(tzinfo=timezone.utc)
+    target = dt if dt.tzinfo else dt.replace(tzinfo=timezone.utc)
+    remaining = target - current
+    if remaining.total_seconds() <= 0:
+        return "Kicking now"
+    minutes = int(remaining.total_seconds() // 60)
+    days, minutes = divmod(minutes, 1440)
+    hours, minutes = divmod(minutes, 60)
+    if days:
+        return f"{days}d {hours}h"
+    if hours:
+        return f"{hours}h {minutes}m"
+    return f"{minutes}m"
+
+
+def kickoff_window(dt: datetime) -> tuple[str, str]:
+    local = _as_local(dt)
+    if local is None:
+        return "Kickoff TBD", "Time to be announced"
+    day = local.strftime("%A")
+    if local.weekday() == 5:
+        if local.hour < 14:
+            return f"{day} · Early window", "Kickoffs before 2 PM CT"
+        if local.hour < 18:
+            return f"{day} · Afternoon", "Kickoffs from 2–5:59 PM CT"
+        return f"{day} · Primetime", "Kickoffs at 6 PM CT or later"
+    if local.hour >= 18:
+        return f"{day} · Night", "Weeknight showcase"
+    return day, "Special kickoff window"
+
+
+def _minutes_since(dt: datetime | None) -> float | None:
+    if dt is None:
+        return None
+    value = dt if dt.tzinfo else dt.replace(tzinfo=timezone.utc)
+    return max((datetime.now(timezone.utc) - value).total_seconds() / 60, 0)
+
+
+def render_data_health(status: dict) -> None:
+    lines_at = status.get("lines_updated_at")
+    scores_at = status.get("scores_updated_at")
+    live_games = int(status.get("live_games") or 0)
+    line_age = _minutes_since(lines_at)
+    score_age = _minutes_since(scores_at)
+    line_state = "warning" if line_age is None or line_age > 36 * 60 else "good"
+    score_state = "warning" if live_games and (score_age is None or score_age > 20) else "good"
+    score_copy = (
+        f"{live_games} live · checked {_freshness_label(scores_at)}"
+        if live_games
+        else "No games live · automatic checks scheduled"
+    )
+    st.markdown(
+        f"""
+        <div class="fd-data-health">
+            <span class="{line_state}"><i></i>DraftKings board · {_freshness_label(lines_at)}</span>
+            <span class="{score_state}"><i></i>{escape(score_copy)}</span>
+        </div>
+        """,
+        unsafe_allow_html=True,
+    )
+    if line_state == "warning" and lines_at is not None:
+        st.warning("The daily DraftKings board is older than expected. Existing tickets are safe; new bets should wait for the next refresh.")
+    if score_state == "warning":
+        st.warning("A live score check is overdue. Tickets will remain open until an official final is posted.")
+
+
 BET_LABEL = {
     "spread_home": "Spread (Home)",
     "spread_away": "Spread (Away)",
@@ -346,7 +449,7 @@ def load_upcoming_games() -> list[dict]:
     select g.id, g.season, g.week, g.season_type, g.start_date, g.neutral_site,
            g.home_team, g.away_team, g.home_conference, g.away_conference,
            g.home_rank, g.away_rank, g.spread_home, g.total_line,
-           g.lines_provider, g.status
+           g.lines_provider, g.lines_updated_at, g.status
       from public.games g
       join nxt on g.season = nxt.season
                 and g.season_type = nxt.season_type
@@ -360,13 +463,14 @@ def load_upcoming_games() -> list[dict]:
         return q(conn, sql)
 
 
-@st.cache_data(ttl=30, show_spinner=False)
+@st.cache_data(ttl=15, show_spinner=False)
 def load_user_bets(user_id: str) -> list[dict]:
     sql = """
     select b.id, b.bet_type, b.line_placed, b.wager_amount, b.payout_multiplier,
            b.status, b.payout_amount, b.created_at, b.settled_at,
            g.home_team, g.away_team, g.week, g.start_date,
-           g.home_score, g.away_score, g.status as game_status
+           g.home_score, g.away_score, g.status as game_status,
+           g.scores_updated_at
       from public.bets b
       join public.games g on g.id = b.game_id
      where b.user_id = :uid
@@ -387,13 +491,19 @@ def load_weekly_standings() -> list[dict]:
     """End-of-week league value, derived from settled tickets in the latest season."""
     sql = """
     with current_season as (
-        select max(season) as season from public.games
+        select coalesce(max(season), extract(year from now())::integer) as season
+          from public.games
     ),
     completed_weeks as (
-        select distinct g.season, g.week
+        select season, 0 as week from current_season
+        union
+        select g.season, g.week
           from public.games g
           join current_season cs on cs.season = g.season
-         where g.status = 'completed'
+         group by g.season, g.week
+        having max(g.start_date) + interval '6 hours' < now()
+           and count(*) filter (where g.status = 'completed') > 0
+           and count(*) filter (where g.status = 'in_progress') = 0
     )
     select u.id as user_id, u.username, w.season, w.week,
            cast(
@@ -422,11 +532,54 @@ def load_all_bets() -> list[dict]:
     sql = """
     select b.user_id, b.id, b.bet_type, b.line_placed, b.wager_amount,
            b.payout_multiplier, b.status, b.payout_amount, b.created_at,
-           g.home_team, g.away_team, g.week, g.start_date,
-           g.home_score, g.away_score
+           g.id as game_id, g.home_team, g.away_team, g.week, g.start_date,
+           g.home_score, g.away_score, g.status as game_status,
+           g.scores_updated_at
       from public.bets b
       join public.games g on g.id = b.game_id
      order by b.created_at desc
+    """
+    with ro() as conn:
+        return q(conn, sql)
+
+
+@st.cache_data(ttl=30, show_spinner=False)
+def load_data_status() -> dict:
+    with ro() as conn:
+        row = q1(
+            conn,
+            """select max(lines_updated_at) as lines_updated_at,
+                      max(scores_updated_at) as scores_updated_at,
+                      count(*) filter (where status = 'in_progress') as live_games
+                 from public.games""",
+        )
+    return row or {"lines_updated_at": None, "scores_updated_at": None, "live_games": 0}
+
+
+@st.cache_data(ttl=45, show_spinner=False)
+def load_weekly_recap_bets() -> list[dict]:
+    """Settled tickets from the latest completed week, with enough context for recap awards."""
+    sql = """
+    with latest as (
+        select season, week
+          from public.games
+         group by season, week
+        having max(start_date) + interval '6 hours' < now()
+           and count(*) filter (where status = 'completed') > 0
+           and count(*) filter (where status = 'in_progress') = 0
+         order by season desc, week desc
+         limit 1
+    )
+    select b.id, b.user_id, u.username, b.bet_type, b.line_placed,
+           b.wager_amount, b.payout_amount, b.status, b.created_at,
+           g.id as game_id, g.season, g.week, g.home_team, g.away_team,
+           g.home_score, g.away_score
+      from public.bets b
+      join public.users u on u.id = b.user_id
+      join public.games g on g.id = b.game_id
+      join latest w on w.season = g.season and w.week = g.week
+     where b.status in ('won', 'lost', 'push')
+     order by b.created_at
     """
     with ro() as conn:
         return q(conn, sql)
@@ -438,6 +591,8 @@ def refresh_data() -> None:
     load_leaderboard.clear()
     load_weekly_standings.clear()
     load_all_bets.clear()
+    load_data_status.clear()
+    load_weekly_recap_bets.clear()
 
 
 def get_balance(user_id: str) -> Decimal:
@@ -454,6 +609,8 @@ def ensure_runtime_schema() -> None:
     """Apply small, idempotent migrations needed by the deployed app."""
     with tx() as conn:
         exec_(conn, "drop index if exists public.bets_one_open_per_market")
+        exec_(conn, "alter table public.games add column if not exists lines_updated_at timestamptz")
+        exec_(conn, "alter table public.games add column if not exists scores_updated_at timestamptz")
         exec_(
             conn,
             """
@@ -968,6 +1125,7 @@ def _render_game_card(game: dict, options: list[tuple[str, Decimal, str]]) -> No
         f"{game['away_conference'] or 'IND'} at {game['home_conference'] or 'IND'}"
     )
     provider = escape(str(game["lines_provider"] or "DraftKings"))
+    line_stamp = escape(_compact_update(game.get("lines_updated_at")))
     active = st.session_state.get("bet_selection", {})
 
     with st.container(border=True):
@@ -976,7 +1134,7 @@ def _render_game_card(game: dict, options: list[tuple[str, Decimal, str]]) -> No
             <div class="fd-game-top">
                 <div class="fd-kickoff"><span>{escape(day)}</span><strong>{escape(clock)}</strong><span>{escape(zone)}</span></div>
                 <div class="fd-game-info">
-                    <div class="fd-game-meta"><span>{escape(site)}</span><span>{provider} · latest line</span></div>
+                    <div class="fd-game-meta"><span>{escape(site)}</span><span>{provider} · {line_stamp}</span></div>
                     <div class="matchup">
                         <span>{rank_html(game['away_rank'])}{escape(game['away_team'])}</span>
                         <span class="versus">{separator}</span>
@@ -1009,7 +1167,11 @@ def _render_game_card(game: dict, options: list[tuple[str, Decimal, str]]) -> No
 def _render_bet_slip(user: dict, balance: Decimal, *, key_prefix: str = "") -> None:
     flash = st.session_state.pop("bet_flash", None)
     if flash:
-        st.success(flash)
+        st.toast(flash, icon="🎟️")
+        st.markdown(
+            "<div class='fd-ticket-locked'>Ticket locked · Your receipt is now in My tickets</div>",
+            unsafe_allow_html=True,
+        )
 
     selection = st.session_state.get("bet_selection")
     if not selection:
@@ -1017,7 +1179,7 @@ def _render_bet_slip(user: dict, balance: Decimal, *, key_prefix: str = "") -> N
             """
             <div class="fd-slip-card">
                 <div class="fd-slip-pick">Your slip is open</div>
-                <div class="fd-slip-empty">Choose any spread or total from the Saturday card. Your pick and potential return will appear here.</div>
+                <div class="fd-slip-empty">Choose any spread or total from this week’s board. Your pick and potential return will appear here.</div>
             </div>
             <div class="fd-slip-footer"></div>
             """,
@@ -1117,8 +1279,8 @@ def tab_place_bets(user: dict, balance: Decimal) -> None:
     st.markdown(
         f"""
         <div class="fd-board-head">
-            <h2>Saturday card</h2>
-            <div class="fd-board-meta">Week {wk['week']} · {wk['season']} {escape(str(wk['season_type']))}<br>All times Central · Lines lock at kickoff</div>
+            <h2>Week {wk['week']} board</h2>
+            <div class="fd-board-meta">{wk['season']} {escape(str(wk['season_type']))}<br>All times Central · Lines lock at kickoff</div>
         </div>
         """,
         unsafe_allow_html=True,
@@ -1169,6 +1331,20 @@ def tab_place_bets(user: dict, balance: Decimal) -> None:
         f"{fmt_money(balance)} available · Even money · No house vig</div>",
         unsafe_allow_html=True,
     )
+    latest_line_update = max(
+        (game.get("lines_updated_at") for game in games if game.get("lines_updated_at")),
+        default=None,
+    )
+    st.markdown(
+        f"""
+        <div class="fd-trust-strip">
+            <span><b>Book</b> DraftKings only</span>
+            <span><b>Board set</b> {escape(_freshness_label(latest_line_update))}</span>
+            <span><b>Rules</b> 2.00× · Tickets final</span>
+        </div>
+        """,
+        unsafe_allow_html=True,
+    )
 
     if not visible:
         st.warning("No games match those filters. Open Tune the card and broaden the board.")
@@ -1176,8 +1352,23 @@ def tab_place_bets(user: dict, balance: Decimal) -> None:
 
     board_col, slip_col = st.columns([2.25, 1])
     with board_col:
+        grouped: dict[tuple[str, str], list[dict]] = {}
         for game in visible:
-            _render_game_card(game, market_options(game, bet_filter))
+            grouped.setdefault(kickoff_window(game["start_date"]), []).append(game)
+        for window_index, ((window_name, window_note), window_games) in enumerate(
+            grouped.items(), start=1
+        ):
+            st.markdown(
+                f"""
+                <div class="fd-window-head">
+                    <span class="fd-window-number">{window_index:02d}</span>
+                    <div><strong>{escape(window_name)}</strong><small>{escape(window_note)} · {len(window_games)} games</small></div>
+                </div>
+                """,
+                unsafe_allow_html=True,
+            )
+            for game in window_games:
+                _render_game_card(game, market_options(game, bet_filter))
     with slip_col:
         _render_bet_slip(user, balance)
 
@@ -1232,11 +1423,31 @@ def render_ticket_cards(rows: list[dict], *, settled: bool) -> None:
         matchup = f"{bet['away_team']} @ {bet['home_team']}"
         if not settled:
             potential = money(wager * Decimal(str(bet["payout_multiplier"])))
-            detail = f"Week {bet['week']} · {_safe_kickoff(bet['start_date'])}"
+            game_status = str(bet.get("game_status") or "scheduled")
+            if game_status == "in_progress":
+                score = (
+                    f"{bet['away_team']} {bet['away_score']}–{bet['home_score']} {bet['home_team']}"
+                    if bet.get("home_score") is not None and bet.get("away_score") is not None
+                    else "Score pending"
+                )
+                detail = f"LIVE · {score}"
+                card_class = "ticket-live"
+                result = "<span class='ticket-result live'><i></i>LIVE</span>"
+            elif game_status == "completed":
+                score = (
+                    f"{bet['away_score']}–{bet['home_score']} final"
+                    if bet.get("home_score") is not None
+                    else "Final posted"
+                )
+                detail = f"{score} · Grading ticket"
+                card_class = "ticket-grading"
+                result = "<span class='ticket-result grading'>FINAL · GRADING</span>"
+            else:
+                detail = f"Week {bet['week']} · {_safe_kickoff(bet['start_date'])}"
+                card_class = ""
+                result = ""
             money_label = "Possible return"
             money_value = fmt_money(potential)
-            card_class = ""
-            result = ""
         else:
             status = str(bet["status"])
             profit = money(bet["payout_amount"]) - wager
@@ -1276,6 +1487,7 @@ MONEY_COLS = {
 }
 
 
+@st.fragment(run_every=60)
 def tab_my_tickets(user: dict, balance: Decimal) -> None:
     rows = load_user_bets(user["id"])
     open_stake = sum((money(b["wager_amount"]) for b in rows if b["status"] == "pending"), Decimal("0"))
@@ -1311,6 +1523,7 @@ def tab_my_tickets(user: dict, balance: Decimal) -> None:
         f"<div class='section-head'><h3>Open tickets</h3><span>{len(open_rows)} live · {fmt_money(open_stake)} at risk</span></div>",
         unsafe_allow_html=True,
     )
+    st.caption("Scores and results refresh automatically while this page is open.")
     if not open_rows:
         st.info("Your slip is clean. Head to the board and make your first call.")
     else:
@@ -1329,14 +1542,254 @@ def tab_my_tickets(user: dict, balance: Decimal) -> None:
 # =====================================================================
 # Tab 3 — Leaderboard & Rival Tracker
 # =====================================================================
+def build_weekly_recap(ticket_rows: list[dict], weekly_rows: list[dict]) -> dict | None:
+    """Create deterministic recap awards from public league data."""
+    completed_weeks = sorted({int(row["week"]) for row in weekly_rows if int(row["week"]) > 0})
+    if not completed_weeks:
+        return None
+    week = completed_weeks[-1]
+    season = max(int(row["season"]) for row in weekly_rows if int(row["week"]) == week)
+    current = [
+        row for row in weekly_rows
+        if int(row["season"]) == season and int(row["week"]) == week
+    ]
+    earlier = sorted(
+        {int(row["week"]) for row in weekly_rows if int(row["season"]) == season and int(row["week"]) < week}
+    )
+    previous_week = earlier[-1] if earlier else 0
+    previous = {
+        str(row["user_id"]): money(row["net_worth"])
+        for row in weekly_rows
+        if int(row["season"]) == season and int(row["week"]) == previous_week
+    }
+    standings = [
+        dict(row)
+        for row in sorted(
+            current,
+            key=lambda row: (-money(row["net_worth"]), str(row["username"]).casefold()),
+        )
+    ]
+    for index, row in enumerate(standings, start=1):
+        row["recap_rank"] = index
+        row["week_change"] = money(row["net_worth"]) - previous.get(
+            str(row["user_id"]), STARTING_BANKROLL
+        )
+
+    winner = sorted(
+        standings,
+        key=lambda row: (-money(row["week_change"]), str(row["username"]).casefold()),
+    )[0]
+    bets = [row for row in ticket_rows if int(row.get("week") or 0) == week]
+    winners = [row for row in bets if row["status"] == "won"]
+    losses = [row for row in bets if row["status"] == "lost"]
+    biggest = max(
+        winners,
+        key=lambda row: money(row["payout_amount"]) - money(row["wager_amount"]),
+        default=None,
+    )
+    bad_beat = max(losses, key=lambda row: money(row["wager_amount"]), default=None)
+    boldest = max(bets, key=lambda row: money(row["wager_amount"]), default=None)
+
+    pick_counts: Counter = Counter()
+    pick_sample: dict[tuple, dict] = {}
+    activity: defaultdict[str, int] = defaultdict(int)
+    for row in bets:
+        pick_key = (int(row["game_id"]), row["bet_type"], str(row["line_placed"]))
+        pick_counts[pick_key] += 1
+        pick_sample.setdefault(pick_key, row)
+        activity[str(row["username"])] += 1
+    popular_key = max(pick_counts, key=lambda key: (pick_counts[key], str(key)), default=None)
+    popular = pick_sample.get(popular_key) if popular_key else None
+    most_active = max(activity, key=lambda name: (activity[name], name.casefold()), default=None)
+
+    return {
+        "season": season,
+        "week": week,
+        "winner": winner,
+        "standings": standings,
+        "ticket_count": len(bets),
+        "biggest": biggest,
+        "bad_beat": bad_beat,
+        "boldest": boldest,
+        "popular": popular,
+        "popular_count": pick_counts.get(popular_key, 0) if popular_key else 0,
+        "most_active": most_active,
+        "most_active_count": activity.get(most_active, 0) if most_active else 0,
+    }
+
+
+def _recap_awards(recap: dict) -> list[tuple[str, str, str]]:
+    biggest = recap.get("biggest")
+    bad_beat = recap.get("bad_beat")
+    boldest = recap.get("boldest")
+    popular = recap.get("popular")
+    awards: list[tuple[str, str, str]] = []
+    if biggest:
+        profit = money(biggest["payout_amount"]) - money(biggest["wager_amount"])
+        awards.append(("Biggest hit", str(biggest["username"]), f"{describe_bet(biggest)} · +{fmt_money(profit)}"))
+    if bad_beat:
+        awards.append(("Bad beat", str(bad_beat["username"]), f"{describe_bet(bad_beat)} · {fmt_money(bad_beat['wager_amount'])}"))
+    if popular:
+        awards.append(("The room was on", describe_bet(popular), f"{recap['popular_count']} tickets · {popular['away_team']} @ {popular['home_team']}"))
+    if boldest:
+        awards.append(("Biggest call", str(boldest["username"]), f"{fmt_money(boldest['wager_amount'])} on {describe_bet(boldest)}"))
+    if recap.get("most_active"):
+        awards.append(("Most active", str(recap["most_active"]), f"{recap['most_active_count']} tickets placed"))
+    return awards[:4]
+
+
+def _share_font(size: int, bold: bool = False) -> ImageFont.ImageFont:
+    names = (
+        ["C:/Windows/Fonts/arialbd.ttf", "/usr/share/fonts/truetype/dejavu/DejaVuSans-Bold.ttf"]
+        if bold
+        else ["C:/Windows/Fonts/arial.ttf", "/usr/share/fonts/truetype/dejavu/DejaVuSans.ttf"]
+    )
+    for name in names:
+        try:
+            return ImageFont.truetype(name, size=size)
+        except OSError:
+            continue
+    return ImageFont.load_default()
+
+
+def build_share_card(recap: dict) -> bytes:
+    """Render a portrait PNG that feels like a final-score broadcast card."""
+    width, height = 1080, 1350
+    ink, field, blue = "#07110e", "#183426", "#174485"
+    yellow, paper, red, muted = "#f2c84b", "#f7f3e8", "#db4a40", "#b9c7bd"
+    image = Image.new("RGB", (width, height), ink)
+    draw = ImageDraw.Draw(image)
+    display = _share_font(76, bold=True)
+    headline = _share_font(54, bold=True)
+    body = _share_font(32, bold=True)
+    utility = _share_font(24)
+    small = _share_font(20, bold=True)
+
+    draw.rectangle((0, 0, width, 170), fill=blue)
+    draw.rectangle((0, 162, width, 170), fill=yellow)
+    draw.text((60, 38), "FOURTH DOWN", font=headline, fill=paper)
+    draw.text((60, 108), f"WEEK {recap['week']:02d}  /  {recap['season']} FINAL", font=utility, fill=yellow)
+    draw.text((60, 218), "THIS WEEK'S WINNER", font=small, fill=yellow)
+    winner = recap["winner"]
+    draw.text((55, 258), str(winner["username"]).upper(), font=display, fill=paper)
+    change = money(winner["week_change"])
+    change_label = f"+{fmt_money(change)}" if change > 0 else (fmt_money(change) if change < 0 else "EVEN")
+    draw.text((60, 350), f"{change_label} THIS WEEK", font=body, fill=yellow)
+
+    draw.rectangle((50, 430, width - 50, 900), fill=field, outline="#667a6c", width=3)
+    draw.text((80, 466), "LEAGUE TABLE", font=small, fill=muted)
+    y = 520
+    for row in recap["standings"][:6]:
+        draw.line((80, y + 58, width - 80, y + 58), fill="#52675a", width=2)
+        draw.text((80, y), f"{int(row['recap_rank']):02d}", font=body, fill=red)
+        draw.text((160, y + 4), str(row["username"]).upper()[:22], font=body, fill=paper)
+        worth = fmt_money(row["net_worth"])
+        box = draw.textbbox((0, 0), worth, font=body)
+        draw.text((width - 80 - (box[2] - box[0]), y + 4), worth, font=body, fill=paper)
+        y += 64
+
+    awards = _recap_awards(recap)
+    draw.text((60, 950), "WEEKLY RECEIPTS", font=small, fill=yellow)
+    y = 995
+    for label, name, detail in awards[:3]:
+        draw.text((60, y), label.upper(), font=small, fill=muted)
+        draw.text((250, y - 5), name.upper()[:28], font=body, fill=paper)
+        draw.text((250, y + 32), detail[:55], font=utility, fill=muted)
+        y += 88
+
+    draw.rectangle((0, height - 62, width, height), fill=yellow)
+    draw.text((60, height - 47), f"{recap['ticket_count']} TICKETS  ·  EVEN MONEY  ·  NO HOUSE VIG", font=small, fill=ink)
+    output = BytesIO()
+    image.save(output, format="PNG", optimize=True)
+    return output.getvalue()
+
+
+def render_share_controls(card: bytes, recap: dict) -> None:
+    filename = f"fourth-down-week-{recap['week']}-final.png"
+    encoded = base64.b64encode(card).decode("ascii")
+    winner = str(recap["winner"]["username"])
+    share_text = json.dumps(
+        f"Fourth Down Week {recap['week']} final: {winner} wins the week."
+    )
+    components.html(
+        f"""
+        <button id="share-week" style="width:100%;height:46px;border:1px solid #07110e;background:#f2c84b;color:#07110e;font:700 12px monospace;text-transform:uppercase;cursor:pointer">Share Week {recap['week']} final</button>
+        <script>
+        const button = document.getElementById('share-week');
+        button.addEventListener('click', async () => {{
+          const raw = atob('{encoded}');
+          const bytes = new Uint8Array(raw.length);
+          for (let i = 0; i < raw.length; i++) bytes[i] = raw.charCodeAt(i);
+          const file = new File([bytes], '{filename}', {{type:'image/png'}});
+          try {{
+            if (navigator.canShare && navigator.canShare({{files:[file]}})) {{
+              await navigator.share({{title:'Fourth Down Week {recap['week']}', text:{share_text}, files:[file]}});
+            }} else {{
+              await navigator.clipboard.writeText({share_text});
+              button.textContent = 'Recap copied';
+            }}
+          }} catch (error) {{ if (error.name !== 'AbortError') button.textContent = 'Use download below'; }}
+        }});
+        </script>
+        """,
+        height=54,
+    )
+    st.download_button(
+        "Download share card",
+        data=card,
+        file_name=filename,
+        mime="image/png",
+        width="stretch",
+    )
+
+
+def render_weekly_recap(ticket_rows: list[dict], weekly_rows: list[dict]) -> None:
+    recap = build_weekly_recap(ticket_rows, weekly_rows)
+    st.markdown(
+        "<div class='section-head'><h3>Weekly recap</h3><span>The week in receipts</span></div>",
+        unsafe_allow_html=True,
+    )
+    if recap is None:
+        st.markdown(
+            "<div class='fd-recap-empty'><strong>Week 1 is waiting.</strong><span>The recap publishes automatically after the final game: weekly winner, biggest hit, bad beat and the room’s favorite pick.</span></div>",
+            unsafe_allow_html=True,
+        )
+        return
+
+    winner = recap["winner"]
+    change = money(winner["week_change"])
+    st.markdown(
+        f"""
+        <div class="fd-week-winner">
+            <small>Week {recap['week']:02d} winner</small>
+            <strong>{escape(str(winner['username']))}</strong>
+            <span>{fmt_money(change)} this week · {recap['ticket_count']} league tickets settled</span>
+        </div>
+        """,
+        unsafe_allow_html=True,
+    )
+    awards = _recap_awards(recap)
+    st.markdown(
+        "<div class='fd-recap-grid'>" + "".join(
+            f"<div class='fd-recap-item'><small>{escape(label)}</small><strong>{escape(name)}</strong><span>{escape(detail)}</span></div>"
+            for label, name, detail in awards
+        ) + "</div>",
+        unsafe_allow_html=True,
+    )
+    with st.expander("Share the week", expanded=False):
+        card = build_share_card(recap)
+        st.image(card, width="stretch")
+        render_share_controls(card, recap)
+
+
 def render_weekly_dashboard(rows: list[dict], user: dict) -> None:
     st.markdown(
-        "<div class='section-head'><h3>Race through the season</h3>"
-        "<span>End-of-week rank · settled tickets only</span></div>",
+        "<div class='section-head'><h3>Season tape</h3>"
+        "<span>Week-by-week rank · settled tickets only</span></div>",
         unsafe_allow_html=True,
     )
     if not rows:
-        st.caption("The movement chart starts after the first week has a final score.")
+        st.caption("The league table appears as soon as the first player joins.")
         return
 
     history = pd.DataFrame(
@@ -1429,7 +1882,7 @@ def render_weekly_dashboard(rows: list[dict], user: dict) -> None:
     )
 
     st.markdown(
-        f"<div class='fd-movement-head'><span>Week {latest_week} movement</span>"
+        f"<div class='fd-movement-head'><span>{'Week 0 starting line' if latest_week == 0 else f'Week {latest_week} movement'}</span>"
         f"<span>{latest_season} season</span></div>",
         unsafe_allow_html=True,
     )
@@ -1459,6 +1912,7 @@ def render_weekly_dashboard(rows: list[dict], user: dict) -> None:
         )
 
 
+@st.fragment(run_every=60)
 def tab_leaderboard(user: dict) -> None:
     board = load_leaderboard()
     if not board:
@@ -1476,7 +1930,26 @@ def tab_leaderboard(user: dict) -> None:
         unsafe_allow_html=True,
     )
 
-    render_weekly_dashboard(load_weekly_standings(), user)
+    your_index = next(
+        (index for index, row in enumerate(board, start=1) if str(row["user_id"]) == user["id"]),
+        None,
+    )
+    your_row = next((row for row in board if str(row["user_id"]) == user["id"]), None)
+    if your_row and your_index == 1:
+        chase_copy = f"You’re setting the pace · {fmt_money(your_row['net_worth'])} net worth"
+    elif your_row:
+        gap = money(leader["net_worth"]) - money(your_row["net_worth"])
+        chase_copy = f"You’re #{your_index} · {fmt_money(gap)} behind {leader['username']}"
+    else:
+        chase_copy = "Your first ticket puts you in the race"
+    st.markdown(
+        f"<div class='fd-rival-callout'><span>Rival watch</span><strong>{escape(chase_copy)}</strong></div>",
+        unsafe_allow_html=True,
+    )
+
+    weekly_rows = load_weekly_standings()
+    render_weekly_dashboard(weekly_rows, user)
+    render_weekly_recap(load_weekly_recap_bets(), weekly_rows)
 
     st.markdown(
         "<div class='section-head'><h3>Current table</h3>"
@@ -1598,21 +2071,27 @@ def main() -> None:
         header_games = load_upcoming_games()
         header_week = str(header_games[0]["week"]) if header_games else "—"
         next_kickoff = _safe_kickoff(header_games[0]["start_date"]) if header_games else "Board pending"
+        kickoff_countdown = _kickoff_countdown(header_games[0]["start_date"]) if header_games else "—"
     except Exception:  # the tabs will show the actionable database error if needed
         header_week = "—"
         next_kickoff = "Board pending"
+        kickoff_countdown = "—"
 
     st.markdown(
         f"""
         <div class="fd-scorebar">
             <div class="fd-brand"><span class="fd-ball">4D</span><span>Fourth Down</span></div>
             <div class="fd-readout fd-week"><span>Week</span><strong>{escape(header_week)}</strong></div>
-            <div class="fd-readout fd-kickoff-readout"><span>Next kickoff</span><strong>{escape(next_kickoff)}</strong></div>
+            <div class="fd-readout fd-kickoff-readout"><span>Next · {escape(next_kickoff)}</span><strong>{escape(kickoff_countdown)}</strong></div>
             <div class="fd-readout"><span>{escape(str(user['username']))}</span><strong>{fmt_money(balance)}</strong></div>
         </div>
         """,
         unsafe_allow_html=True,
     )
+    try:
+        render_data_health(load_data_status())
+    except Exception as exc:  # noqa: BLE001
+        st.warning(f"Automation status is temporarily unavailable: {exc}")
 
     t1, t2, t3 = st.tabs(["The board", "My tickets", "Standings"])
     with t1:

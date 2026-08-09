@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import cfb_sync
+import pytest
 
 
 def test_draftkings_is_the_only_line_source(monkeypatch) -> None:
@@ -54,3 +55,13 @@ def test_live_scoreboard_shapes_camel_and_snake_case() -> None:
         {"id": 101, "status": "in_progress", "home_score": 21, "away_score": 17},
         {"id": 102, "status": "completed", "home_score": 31, "away_score": 24},
     ]
+
+
+def test_failed_line_pull_preserves_existing_board(monkeypatch) -> None:
+    def fail(*_args, **_kwargs):
+        raise RuntimeError("provider unavailable")
+
+    monkeypatch.setattr(cfb_sync, "api_get", fail)
+
+    with pytest.raises(RuntimeError, match="existing lines preserved"):
+        cfb_sync.fetch_lines(2026, "regular", 1)

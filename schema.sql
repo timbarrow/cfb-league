@@ -45,9 +45,11 @@ create table if not exists public.games (
     spread_home     numeric(5,1),                     -- home-team spread, negative = home favored
     total_line      numeric(5,1),
     lines_provider  text,
+    lines_updated_at timestamptz,
     status          text        not null default 'scheduled',  -- scheduled | in_progress | completed
     home_score      integer,
     away_score      integer,
+    scores_updated_at timestamptz,
     updated_at      timestamptz not null default now(),
     constraint games_status_chk      check (status in ('scheduled','in_progress','completed')),
     constraint games_season_type_chk check (season_type in ('regular','postseason')),
@@ -60,6 +62,10 @@ create table if not exists public.games (
         status <> 'completed' or (home_score is not null and away_score is not null)
     )
 );
+
+-- Idempotent upgrades for leagues created with an earlier schema.
+alter table public.games add column if not exists lines_updated_at timestamptz;
+alter table public.games add column if not exists scores_updated_at timestamptz;
 
 create index if not exists games_week_idx       on public.games (season, season_type, week);
 create index if not exists games_start_date_idx on public.games (start_date);

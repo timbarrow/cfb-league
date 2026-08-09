@@ -205,6 +205,31 @@ div[data-testid="stMainBlockContainer"]:has(.fd-auth-card) { max-width: 880px; }
 .fd-board-head h2 { margin: 0; color: var(--fd-yellow); font-size: clamp(2.4rem, 7vw, 4.6rem); line-height: .92; }
 .fd-board-meta { color: var(--fd-paper); font: 500 .62rem/1.55 "IBM Plex Mono", monospace; text-align: right; text-transform: uppercase; }
 .fd-board-summary { margin: .75rem 0 1rem; color: #cad2cc; font: 500 .63rem "IBM Plex Mono", monospace; text-transform: uppercase; }
+.fd-trust-strip {
+    display: grid;
+    grid-template-columns: repeat(3, 1fr);
+    margin: 0 0 1rem;
+    border-top: 1px solid var(--fd-rule);
+    border-bottom: 1px solid var(--fd-rule);
+    color: #cad2cc;
+    font: 500 .56rem/1.45 "IBM Plex Mono", monospace;
+    text-transform: uppercase;
+}
+.fd-trust-strip span { padding: .65rem .75rem; }
+.fd-trust-strip span + span { border-left: 1px solid var(--fd-rule); }
+.fd-trust-strip b { display: block; margin-bottom: .18rem; color: var(--fd-yellow); font-weight: 600; }
+.fd-window-head {
+    display: grid;
+    grid-template-columns: 48px minmax(0, 1fr);
+    align-items: center;
+    min-height: 58px;
+    margin: 1.25rem 0 .55rem;
+    border-top: 1px solid var(--fd-yellow);
+    border-bottom: 1px solid var(--fd-rule);
+}
+.fd-window-number { color: var(--fd-red); font: 400 1.35rem "Archivo Black", sans-serif; }
+.fd-window-head strong { display: block; color: var(--fd-paper); font: 400 1rem "Archivo Black", sans-serif; text-transform: uppercase; }
+.fd-window-head small { display: block; margin-top: .15rem; color: #cad2cc; font: 500 .55rem "IBM Plex Mono", monospace; text-transform: uppercase; }
 
 div[data-testid="stHorizontalBlock"]:has(.fd-slip-card) {
     align-items: flex-start;
@@ -297,6 +322,18 @@ div[data-testid="stLayoutWrapper"]:has(.fd-game-top) .stButton > button[kind^="p
     margin: 1.25rem -1rem -1.5rem;
     background: linear-gradient(135deg, transparent 7px, var(--fd-yellow) 0) 0 0 / 14px 14px repeat-x;
 }
+.fd-ticket-locked {
+    margin: .65rem 0;
+    padding: .75rem;
+    color: var(--fd-ink);
+    background: var(--fd-yellow);
+    border: 1px solid var(--fd-ink);
+    font: 600 .61rem "IBM Plex Mono", monospace;
+    text-align: center;
+    text-transform: uppercase;
+    animation: ticket-lock .42s ease-out both;
+}
+@keyframes ticket-lock { from { transform: translateY(8px); opacity: 0; } to { transform: none; opacity: 1; } }
 div[data-testid="stHorizontalBlock"]:has(.fd-slip-card) > div[data-testid="stColumn"]:last-child label p { color: var(--fd-paper) !important; font: 500 .62rem "IBM Plex Mono", monospace; text-transform: uppercase; }
 div[data-testid="stHorizontalBlock"]:has(.fd-slip-card) > div[data-testid="stColumn"]:last-child .stButton > button[kind^="primary"] { background: var(--fd-yellow); border-color: var(--fd-ink); color: var(--fd-ink); }
 div[data-testid="stHorizontalBlock"]:has(.fd-slip-card) > div[data-testid="stColumn"]:last-child .stButton > button[kind^="primary"] p { color: var(--fd-ink) !important; }
@@ -342,12 +379,18 @@ div[data-testid="stDialog"] .stButton > button[kind^="primary"] p { color: var(-
 }
 .ticket-card.settled-won .ticket-result { color: var(--fd-yellow); }
 .ticket-card.settled-lost .ticket-result { color: #ef8279; }
+.ticket-card.ticket-live { padding-left: .75rem; border-left: 3px solid var(--fd-red); background: rgba(219, 74, 64, .07); }
+.ticket-card.ticket-grading { padding-left: .75rem; border-left: 3px solid var(--fd-yellow); background: rgba(242, 200, 75, .06); }
 .ticket-pick { color: var(--fd-paper); font-size: 1.1rem; }
 .ticket-game, .ticket-meta { color: #cad2cc; font: 500 .59rem/1.5 "IBM Plex Mono", monospace; text-transform: uppercase; }
 .ticket-money { grid-row: 1 / span 2; grid-column: 2; text-align: right; }
 .ticket-money strong { display: block; color: var(--fd-paper); font: 400 1.15rem "Archivo Black", sans-serif; }
 .ticket-money span { color: #cad2cc; font: 500 .55rem "IBM Plex Mono", monospace; text-transform: uppercase; }
 .ticket-result { margin-left: .45rem; color: var(--fd-yellow); font: 500 .58rem "IBM Plex Mono", monospace; }
+.ticket-result.live { color: #ef8279; }
+.ticket-result.live i { display: inline-block; width: 6px; height: 6px; margin-right: 5px; border-radius: 50%; background: var(--fd-red); animation: live-pulse 1.4s ease-in-out infinite; }
+.ticket-result.grading { color: var(--fd-yellow); }
+@keyframes live-pulse { 0%, 100% { opacity: 1; } 50% { opacity: .25; } }
 .leader-row { display: grid; grid-template-columns: 48px minmax(0, 1fr) auto; align-items: center; gap: .8rem; padding: .8rem 0; margin: 0; background: transparent; border: 0; border-bottom: 1px solid var(--fd-rule); border-radius: 0; }
 .leader-row.is-you { background: rgba(242, 200, 75, .08); }
 .leader-rank { color: var(--fd-red); font: 400 1.5rem "Archivo Black", sans-serif; }
@@ -383,6 +426,55 @@ div[data-testid="stDialog"] .stButton > button[kind^="primary"] p { color: var(-
 .fd-movement-change.up { color: var(--fd-yellow); }
 .fd-movement-change.down { color: #ef8279; }
 .fd-movement-change.flat { color: #cad2cc; }
+.fd-data-health {
+    display: flex;
+    justify-content: space-between;
+    gap: 1rem;
+    padding: .55rem .75rem;
+    border-right: 1px solid var(--fd-rule);
+    border-bottom: 1px solid var(--fd-rule);
+    border-left: 1px solid var(--fd-rule);
+    color: #cad2cc;
+    font: 500 .54rem "IBM Plex Mono", monospace;
+    text-transform: uppercase;
+}
+.fd-data-health span { display: inline-flex; align-items: center; gap: .4rem; }
+.fd-data-health i { width: 7px; height: 7px; border-radius: 50%; background: #67c694; }
+.fd-data-health .warning i { background: var(--fd-yellow); }
+.fd-rival-callout {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    gap: 1rem;
+    padding: .7rem .8rem;
+    background: var(--fd-blue);
+    border-bottom: 4px solid var(--fd-yellow);
+}
+.fd-rival-callout span { color: var(--fd-yellow); font: 600 .56rem "IBM Plex Mono", monospace; text-transform: uppercase; }
+.fd-rival-callout strong { color: var(--fd-paper); font: 500 .68rem "IBM Plex Mono", monospace; text-align: right; text-transform: uppercase; }
+.fd-recap-empty { display: grid; gap: .35rem; padding: 1rem; border: 1px dashed var(--fd-rule); }
+.fd-recap-empty strong { color: var(--fd-paper); font: 400 1.15rem "Archivo Black", sans-serif; text-transform: uppercase; }
+.fd-recap-empty span { color: #cad2cc; font: 500 .62rem/1.55 "IBM Plex Mono", monospace; }
+.fd-week-winner {
+    position: relative;
+    overflow: hidden;
+    display: grid;
+    min-height: 180px;
+    align-content: end;
+    padding: 1.25rem;
+    background: var(--fd-blue);
+    border: 1px solid var(--fd-rule);
+    border-bottom: 8px solid var(--fd-yellow);
+}
+.fd-week-winner:after { content: "W"; position: absolute; right: -.02em; bottom: -.26em; color: rgba(247,243,232,.07); font: 400 15rem "Archivo Black", sans-serif; }
+.fd-week-winner small { color: var(--fd-yellow); font: 600 .6rem "IBM Plex Mono", monospace; letter-spacing: .08em; text-transform: uppercase; }
+.fd-week-winner strong { z-index: 1; color: var(--fd-paper); font: 400 clamp(2.4rem, 8vw, 4.8rem)/.95 "Archivo Black", sans-serif; text-transform: uppercase; }
+.fd-week-winner span { z-index: 1; margin-top: .5rem; color: #cad2cc; font: 500 .61rem "IBM Plex Mono", monospace; text-transform: uppercase; }
+.fd-recap-grid { display: grid; grid-template-columns: repeat(2, 1fr); border-right: 1px solid var(--fd-rule); }
+.fd-recap-item { display: grid; min-height: 118px; align-content: center; gap: .18rem; padding: .85rem; border-bottom: 1px solid var(--fd-rule); border-left: 1px solid var(--fd-rule); }
+.fd-recap-item small { color: var(--fd-red); font: 600 .55rem "IBM Plex Mono", monospace; text-transform: uppercase; }
+.fd-recap-item strong { color: var(--fd-paper); font: 400 .98rem "Archivo Black", sans-serif; text-transform: uppercase; }
+.fd-recap-item span { color: #cad2cc; font: 500 .56rem/1.45 "IBM Plex Mono", monospace; text-transform: uppercase; }
 .fd-view-head { margin: 2rem 0 1rem; }
 .fd-view-head h2 { margin: 0; color: var(--fd-yellow); font-size: clamp(2.4rem, 7vw, 4.6rem); line-height: .92; }
 .fd-view-head p { margin: .4rem 0 0; color: #cad2cc; font: 500 .62rem "IBM Plex Mono", monospace; text-transform: uppercase; }
@@ -401,9 +493,14 @@ div[data-testid="stDialog"] .stButton > button[kind^="primary"] p { color: var(-
     .fd-auth-pass { min-height: 160px; border-left: 0; border-top: 1px solid var(--fd-ink); }
     .fd-board-head { align-items: flex-start; flex-direction: column; }
     .fd-board-meta { text-align: left; }
-    div[data-testid="stHorizontalBlock"]:has(.fd-slip-card) { display: flex !important; flex-direction: column-reverse !important; }
+    .fd-trust-strip span { padding: .55rem .4rem; font-size: .5rem; }
+    .fd-data-health { align-items: flex-start; flex-direction: column; gap: .45rem; }
+    .fd-rival-callout { align-items: flex-start; flex-direction: column; }
+    .fd-rival-callout strong { text-align: left; }
+    .fd-recap-grid { grid-template-columns: 1fr; }
+    div[data-testid="stHorizontalBlock"]:has(.fd-slip-card) { display: flex !important; flex-direction: column !important; }
     div[data-testid="stHorizontalBlock"]:has(.fd-slip-card) > div[data-testid="stColumn"] { width: 100% !important; min-width: 100% !important; flex: 0 0 100% !important; }
-    div[data-testid="stHorizontalBlock"]:has(.fd-slip-card) > div[data-testid="stColumn"]:last-child { position: static; border-left: 0; border-bottom: 1px solid var(--fd-ink); }
+    div[data-testid="stHorizontalBlock"]:has(.fd-slip-card) > div[data-testid="stColumn"]:last-child { display: none !important; }
     div[data-testid="stHorizontalBlock"]:has(.st-key-quick_stake_50) { flex-wrap: nowrap !important; }
     div[data-testid="stHorizontalBlock"]:has(.st-key-quick_stake_50) > div[data-testid="stColumn"] { width: auto !important; min-width: 0 !important; flex: 1 1 33.333% !important; }
     .fd-game-top { grid-template-columns: 64px minmax(0, 1fr); }
@@ -423,5 +520,5 @@ div[data-testid="stDialog"] .stButton > button[kind^="primary"] p { color: var(-
 }
 
 @media (prefers-reduced-motion: reduce) {
-    *, *:before, *:after { scroll-behavior: auto !important; transition: none !important; }
+    *, *:before, *:after { scroll-behavior: auto !important; transition: none !important; animation: none !important; }
 }

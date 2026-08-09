@@ -44,6 +44,13 @@ LINES_PROVIDER = os.getenv("CFBD_PROVIDER", "DraftKings").strip() or "DraftKings
 RANKING_POLL = os.getenv("CFBD_POLL", "AP Top 25")
 
 
+def ensure_sync_schema() -> None:
+    """Keep scheduled jobs safe when a deployment adds sync metadata columns."""
+    with tx() as conn:
+        exec_(conn, "alter table public.games add column if not exists lines_updated_at timestamptz")
+        exec_(conn, "alter table public.games add column if not exists scores_updated_at timestamptz")
+
+
 # ---------------------------------------------------------------------------
 # HTTP
 # ---------------------------------------------------------------------------
@@ -250,8 +257,8 @@ def fetch_lines(season: int, season_type: str, week: int) -> dict[int, dict]:
     try:
         payload = api_get("lines", year=season, week=week, seasonType=season_type)
     except RuntimeError as exc:
-        log.warning("lines fetch failed: %s — games will sync without odds.", exc)
-        return {}
+        # A failed provider request must never erase yesterday's valid board.
+        raise RuntimeError(f"DraftKings line refresh failed; existing lines preserved: {exc}") from exc
 
     out: dict[int, dict] = {}
     for row in payload:
@@ -345,12 +352,15 @@ insert into public.games (
     id, season, week, season_type, start_date, neutral_site,
     home_team, away_team, home_conference, away_conference,
     home_rank, away_rank, spread_home, total_line, lines_provider,
-    status, home_score, away_score, updated_at
+    status, home_score, away_score, lines_updated_at, scores_updated_at, updated_at
 ) values (
     :id, :season, :week, :season_type, :start_date, :neutral_site,
     :home_team, :away_team, :home_conference, :away_conference,
     :home_rank, :away_rank, :spread_home, :total_line, :lines_provider,
-    :status, :home_score, :away_score, now()
+    :status, :home_score, :away_score,
+    case when :replace_odds then now() else null end,
+    case when :status <> 'scheduled' then now() else null end,
+    now()
 )
 on conflict (id) do update set
     season          = excluded.season,
@@ -373,8 +383,12 @@ on conflict (id) do update set
                            else coalesce(excluded.total_line, public.games.total_line) end,
     lines_provider  = case when :replace_odds then excluded.lines_provider
                            else coalesce(excluded.lines_provider, public.games.lines_provider) end,
+    lines_updated_at = case when :replace_odds then now()
+                            else public.games.lines_updated_at end,
     home_score      = coalesce(excluded.home_score, public.games.home_score),
     away_score      = coalesce(excluded.away_score, public.games.away_score),
+    scores_updated_at = case when excluded.status <> 'scheduled' then now()
+                             else public.games.scores_updated_at end,
     -- status only moves forward: scheduled -> in_progress -> completed
     status = case
         when public.games.status = 'completed' then 'completed'
@@ -465,6 +479,7 @@ update public.games
            when :status = 'in_progress' then 'in_progress'
            else status
        end,
+       scores_updated_at = now(),
        updated_at = now()
  where id = :id
 """
@@ -500,6 +515,7 @@ def main(argv: list[str] | None = None) -> int:
     args = ap.parse_args(argv)
 
     now = datetime.now(timezone.utc)
+    ensure_sync_schema()
 
     if args.live:
         sync_live_scoreboard()
