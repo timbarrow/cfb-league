@@ -1,0 +1,57 @@
+name: Keep Streamlit app awake
+
+on:
+  schedule:
+    # Twice daily. Scheduled workflows use UTC.
+    - cron: "17 2,14 * * *"
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: keep-streamlit-awake
+  cancel-in-progress: true
+
+jobs:
+  heartbeat:
+    runs-on: ubuntu-latest
+    timeout-minutes: 3
+    env:
+      # The app root currently requires Streamlit authentication. This public
+      # endpoint reaches the deployment without storing a login or session.
+      HEALTH_URL: https://cfb-league-play.streamlit.app/healthz
+
+    steps:
+      - name: Request Streamlit health endpoint
+        shell: bash
+        run: |
+          response_file="$RUNNER_TEMP/streamlit-health.json"
+          final_url="$(curl \
+            --fail \
+            --location \
+            --silent \
+            --show-error \
+            --retry 3 \
+            --retry-all-errors \
+            --connect-timeout 15 \
+            --max-time 60 \
+            --user-agent "cfb-league-heartbeat/1.0" \
+            --output "$response_file" \
+            --write-out '%{url_effective}' \
+            "$HEALTH_URL")"
+
+          echo "Final URL: $final_url"
+
+          if [[ "$final_url" != "$HEALTH_URL" ]]; then
+            echo "Heartbeat was redirected away from the health endpoint." >&2
+            exit 1
+          fi
+
+          if ! grep -Eq '"status"[[:space:]]*:[[:space:]]*"ok"' "$response_file"; then
+            echo "Streamlit returned an unexpected health response:" >&2
+            cat "$response_file" >&2
+            exit 1
+          fi
+
+          echo "Streamlit heartbeat succeeded."
