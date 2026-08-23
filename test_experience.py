@@ -1,6 +1,6 @@
 """Experience-layer checks for standings, recap, sharing and time grouping."""
 
-from datetime import datetime, timezone
+from datetime import datetime, timedelta, timezone
 from decimal import Decimal
 from io import BytesIO
 
@@ -75,3 +75,16 @@ def test_kickoff_windows_and_countdown_are_simple() -> None:
         saturday_early,
         now=datetime(2026, 8, 29, 14, 30, tzinfo=timezone.utc),
     ) == "1h 30m"
+
+
+def test_ticket_delete_window_closes_at_first_kickoff() -> None:
+    kickoff = datetime(2026, 8, 29, 16, 0, tzinfo=timezone.utc)
+    ticket = {"status": "pending", "season_first_start": kickoff}
+
+    assert app.ticket_delete_is_open(ticket, kickoff - timedelta(seconds=1))
+    assert not app.ticket_delete_is_open(ticket, kickoff)
+    assert not app.ticket_delete_is_open(ticket, kickoff + timedelta(seconds=1))
+    assert not app.ticket_delete_is_open(
+        {"status": "won", "season_first_start": kickoff},
+        kickoff - timedelta(days=1),
+    )
