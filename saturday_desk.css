@@ -142,6 +142,21 @@ div[data-testid="stExpander"] summary {
     text-transform: uppercase;
 }
 div[data-testid="stExpander"] summary p, div[data-testid="stExpander"] label p { color: var(--fd-ink) !important; }
+/* Expanders use a pale surface, while ticket cards are also rendered on the
+   dark ledger. Override the shared light-on-dark ticket colors only here. */
+div[data-testid="stExpander"] [data-testid="stMarkdownContainer"] > p,
+div[data-testid="stExpander"] [data-testid="stCaptionContainer"],
+div[data-testid="stExpander"] [data-testid="stCaptionContainer"] p { color: var(--fd-ink) !important; }
+div[data-testid="stExpander"] .ticket-pick,
+div[data-testid="stExpander"] .ticket-money strong { color: var(--fd-ink); }
+div[data-testid="stExpander"] .ticket-game,
+div[data-testid="stExpander"] .ticket-meta,
+div[data-testid="stExpander"] .ticket-money span { color: #435349; }
+div[data-testid="stExpander"] .ticket-result { color: var(--fd-blue); }
+div[data-testid="stExpander"] .ticket-result.live,
+div[data-testid="stExpander"] .ticket-card.settled-lost .ticket-result { color: #a62f29; }
+div[data-testid="stExpander"] .ticket-result.grading,
+div[data-testid="stExpander"] .ticket-card.settled-won .ticket-result { color: #295d35; }
 div[data-testid="stExpander"] div[role="radiogroup"] > label {
     border: 1px solid var(--fd-rule) !important;
     border-radius: 0 !important;
