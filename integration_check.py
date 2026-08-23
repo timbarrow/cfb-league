@@ -86,6 +86,39 @@ def main() -> int:
     uid, rid = str(me["id"]), str(rival["id"])
     check("starting bankroll", Decimal(str(me["balance"])), Decimal("10000.00"))
 
+    print("\n[preseason ticket deletion]")
+    with tx() as c:
+        exec_(
+            c,
+            """insert into public.games
+               (id, season, week, season_type, start_date, home_team, away_team,
+                spread_home, total_line, status)
+               values (301, 2027, 1, 'regular', now() + interval '10 days',
+                       'Notre Dame', 'Navy', -4.5, 48.5, 'scheduled')""",
+        )
+    ok, _ = app.place_bet(uid, 301, "spread_home", Decimal("-4.5"), Decimal("75"))
+    check("place preseason-refundable ticket", ok, True)
+    with ro() as c:
+        ticket = q1(c, "select id from public.bets where user_id = :uid and game_id = 301", uid=uid)
+    ticket_id = str(ticket["id"])
+    check("another player cannot delete ticket", app.delete_bet(rid, ticket_id)[0], False)
+    ok, msg = app.delete_bet(uid, ticket_id)
+    check("owner deletes before season kickoff", (ok, "75.00" in msg), (True, True))
+    check("deleted stake refunded", app.get_balance(uid), Decimal("10000.00"))
+
+    ok, _ = app.place_bet(uid, 301, "spread_home", Decimal("-4.5"), Decimal("75"))
+    with ro() as c:
+        ticket = q1(c, "select id from public.bets where user_id = :uid and game_id = 301", uid=uid)
+    ticket_id = str(ticket["id"])
+    with tx() as c:
+        exec_(c, "update public.games set start_date = now() - interval '1 second' where id = 301")
+    ok, msg = app.delete_bet(uid, ticket_id)
+    check("delete blocked once first game starts", (ok, "final" in msg), (False, True))
+    with tx() as c:
+        exec_(c, "update public.games set start_date = now() + interval '10 days' where id = 301")
+    check("test ticket cleanup", app.delete_bet(uid, ticket_id)[0], True)
+    check("cleanup restores bankroll", app.get_balance(uid), Decimal("10000.00"))
+
     print("\n[bet placement]")
     ok, msg = app.place_bet(uid, 101, "spread_home", Decimal("-3.5"), Decimal("500"))
     check("place home spread", (ok, "500.00" in msg), (True, True))

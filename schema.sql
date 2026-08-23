@@ -103,7 +103,7 @@ create index if not exists bets_game_idx    on public.bets (game_id);
 create index if not exists bets_pending_idx on public.bets (status) where status = 'pending';
 
 -- Players may add to the same side or market as often as they choose. Each
--- insert is an immutable ticket at the line shown at that moment.
+-- insert captures a separate ticket at the line shown at that moment.
 drop index if exists public.bets_one_open_per_market;
 
 -- ---------------------------------------------------------------------

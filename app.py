@@ -468,9 +468,12 @@ def load_user_bets(user_id: str) -> list[dict]:
     sql = """
     select b.id, b.bet_type, b.line_placed, b.wager_amount, b.payout_multiplier,
            b.status, b.payout_amount, b.created_at, b.settled_at,
-           g.home_team, g.away_team, g.week, g.start_date,
+           g.home_team, g.away_team, g.season, g.week, g.start_date,
            g.home_score, g.away_score, g.status as game_status,
-           g.scores_updated_at
+           g.scores_updated_at,
+           (select min(first_game.start_date)
+              from public.games first_game
+             where first_game.season = g.season) as season_first_start
       from public.bets b
       join public.games g on g.id = b.game_id
      where b.user_id = :uid
@@ -922,6 +925,75 @@ def place_bet(
     return True, f"Ticket placed: {fmt_money(wager)} to win {fmt_money(to_win)}."
 
 
+def ticket_delete_is_open(bet: dict, now: datetime | None = None) -> bool:
+    """Tickets are refundable only until the season's first kickoff."""
+    if str(bet.get("status")) != "pending":
+        return False
+    cutoff = bet.get("season_first_start")
+    if cutoff is None:
+        return False
+    if cutoff.tzinfo is None:
+        cutoff = cutoff.replace(tzinfo=timezone.utc)
+    current = now or datetime.now(timezone.utc)
+    if current.tzinfo is None:
+        current = current.replace(tzinfo=timezone.utc)
+    return current < cutoff
+
+
+def delete_bet(user_id: str, bet_id: str) -> tuple[bool, str]:
+    """Delete one owned pending ticket and refund it before season kickoff."""
+    try:
+        with tx() as conn:
+            bet = q1(
+                conn,
+                """select b.id, b.wager_amount, b.status, g.season
+                     from public.bets b
+                     join public.games g on g.id = b.game_id
+                    where b.id = :bid and b.user_id = :uid
+                    for update of b""",
+                bid=bet_id,
+                uid=user_id,
+            )
+            if not bet:
+                return False, "Ticket not found."
+            if bet["status"] != "pending":
+                return False, "Settled tickets cannot be deleted."
+
+            window = q1(
+                conn,
+                """select min(start_date) as season_first_start,
+                          clock_timestamp() as checked_at
+                     from public.games
+                    where season = :season""",
+                season=bet["season"],
+            )
+            cutoff = window["season_first_start"] if window else None
+            checked_at = window["checked_at"] if window else datetime.now(timezone.utc)
+            if cutoff is None or checked_at >= cutoff:
+                return False, "The season has started. Tickets are now final."
+
+            deleted = exec_(
+                conn,
+                """delete from public.bets
+                    where id = :bid and user_id = :uid and status = 'pending'""",
+                bid=bet_id,
+                uid=user_id,
+            )
+            if deleted.rowcount != 1:
+                return False, "Ticket could not be deleted."
+            exec_(
+                conn,
+                "update public.users set balance = balance + :refund where id = :uid",
+                refund=money(bet["wager_amount"]),
+                uid=user_id,
+            )
+    except Exception as exc:  # noqa: BLE001
+        return False, f"Could not delete ticket: {exc}"
+
+    refresh_data()
+    return True, f"Ticket deleted. {fmt_money(bet['wager_amount'])} returned to cash."
+
+
 # =====================================================================
 # Tab 1 — Place Bets
 # =====================================================================
@@ -1169,7 +1241,7 @@ def _render_bet_slip(user: dict, balance: Decimal, *, key_prefix: str = "") -> N
     if flash:
         st.toast(flash, icon="🎟️")
         st.markdown(
-            "<div class='fd-ticket-locked'>Ticket locked · Your receipt is now in My tickets</div>",
+            "<div class='fd-ticket-locked'>Ticket placed · Your receipt is now in My tickets</div>",
             unsafe_allow_html=True,
         )
 
@@ -1257,7 +1329,10 @@ def _render_bet_slip(user: dict, balance: Decimal, *, key_prefix: str = "") -> N
         else:
             st.error(msg)
 
-    st.caption("Tickets are final once placed. You can add another bet on this game at any time before kickoff.")
+    st.caption(
+        "Pending tickets can be deleted for a full refund until the season's first kickoff; "
+        "after that, every ticket is final. You can add another bet on this game before its kickoff."
+    )
     st.markdown("<div class='fd-slip-footer'></div>", unsafe_allow_html=True)
 
 
@@ -1340,7 +1415,7 @@ def tab_place_bets(user: dict, balance: Decimal) -> None:
         <div class="fd-trust-strip">
             <span><b>Books</b> DraftKings first · Bovada backup</span>
             <span><b>Board set</b> {escape(_freshness_label(latest_line_update))}</span>
-            <span><b>Rules</b> 2.00× · Tickets final</span>
+            <span><b>Rules</b> 2.00× · Final after season kickoff</span>
         </div>
         """,
         unsafe_allow_html=True,
@@ -1416,7 +1491,12 @@ def bets_to_frames(rows: list[dict]) -> tuple[pd.DataFrame, pd.DataFrame]:
     return pd.DataFrame(open_rows), pd.DataFrame(settled_rows)
 
 
-def render_ticket_cards(rows: list[dict], *, settled: bool) -> None:
+def render_ticket_cards(
+    rows: list[dict],
+    *,
+    settled: bool,
+    delete_user_id: str | None = None,
+) -> None:
     """Render tickets as responsive slips instead of a horizontally scrolling table."""
     for bet in rows:
         wager = money(bet["wager_amount"])
@@ -1475,6 +1555,16 @@ def render_ticket_cards(rows: list[dict], *, settled: bool) -> None:
             """,
             unsafe_allow_html=True,
         )
+        if not settled and delete_user_id and ticket_delete_is_open(bet):
+            if st.button(
+                f"Delete bet · refund {fmt_money(wager)}",
+                key=f"delete_bet_{bet['id']}",
+                width="stretch",
+                help="Available only until the season's first game kicks off.",
+            ):
+                ok, message = delete_bet(delete_user_id, str(bet["id"]))
+                st.session_state.ticket_delete_flash = (ok, message)
+                st.rerun()
 
 
 MONEY_COLS = {
@@ -1487,7 +1577,7 @@ MONEY_COLS = {
 }
 
 
-@st.fragment(run_every=60)
+@st.fragment(run_every=15)
 def tab_my_tickets(user: dict, balance: Decimal) -> None:
     rows = load_user_bets(user["id"])
     open_stake = sum((money(b["wager_amount"]) for b in rows if b["status"] == "pending"), Decimal("0"))
@@ -1501,6 +1591,13 @@ def tab_my_tickets(user: dict, balance: Decimal) -> None:
         "<div class='fd-view-head'><h2>My tickets</h2><p>Open positions and final receipts</p></div>",
         unsafe_allow_html=True,
     )
+    flash = st.session_state.pop("ticket_delete_flash", None)
+    if flash:
+        ok, message = flash
+        if ok:
+            st.success(message)
+        else:
+            st.error(message)
 
     c1, c2 = st.columns(2)
     c1.metric("Cash", fmt_money(balance))
@@ -1527,7 +1624,14 @@ def tab_my_tickets(user: dict, balance: Decimal) -> None:
     if not open_rows:
         st.info("Your slip is clean. Head to the board and make your first call.")
     else:
-        render_ticket_cards(open_rows, settled=False)
+        deletable = [bet for bet in open_rows if ticket_delete_is_open(bet)]
+        if deletable:
+            cutoff = min(bet["season_first_start"] for bet in deletable)
+            st.caption(
+                "Use the delete button under an individual ticket for a full refund until "
+                f"the season's first kickoff: {_safe_kickoff(cutoff)}."
+            )
+        render_ticket_cards(open_rows, settled=False, delete_user_id=user["id"])
 
     st.markdown(
         f"<div class='section-head'><h3>Settled</h3><span>Record {record}{win_rate}</span></div>",

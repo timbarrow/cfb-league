@@ -104,9 +104,13 @@ four-minute interval.
 
 ### Tickets, live results and sign-in
 
-Tickets are immutable once placed: there is no cancel or rescind operation.
-Players can place any number of separate tickets on the same game and market,
-whether the line moved or remained unchanged.
+Pending tickets can be deleted from **My tickets** for a full refund until the
+season's earliest kickoff. At that instant the delete controls disappear and
+the transaction rejects any stale deletion request; tickets are final for the
+rest of the season. Deletion is per ticket—there is no bulk-delete action—and
+the refunded ticket is removed as though it had never been placed. Players can
+place any number of separate tickets on the same game and market, whether the
+line moved or remained unchanged.
 
 After a successful sign-in (or new-account signup), the browser receives a
 random 30-day session token. The database stores only its SHA-256 hash—not the

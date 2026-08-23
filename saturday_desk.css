@@ -142,6 +142,21 @@ div[data-testid="stExpander"] summary {
     text-transform: uppercase;
 }
 div[data-testid="stExpander"] summary p, div[data-testid="stExpander"] label p { color: var(--fd-ink) !important; }
+/* Expanders use a pale surface, while ticket cards are also rendered on the
+   dark ledger. Override the shared light-on-dark ticket colors only here. */
+div[data-testid="stExpander"] [data-testid="stMarkdownContainer"] > p,
+div[data-testid="stExpander"] [data-testid="stCaptionContainer"],
+div[data-testid="stExpander"] [data-testid="stCaptionContainer"] p { color: var(--fd-ink) !important; }
+div[data-testid="stExpander"] .ticket-pick,
+div[data-testid="stExpander"] .ticket-money strong { color: var(--fd-ink); }
+div[data-testid="stExpander"] .ticket-game,
+div[data-testid="stExpander"] .ticket-meta,
+div[data-testid="stExpander"] .ticket-money span { color: #435349; }
+div[data-testid="stExpander"] .ticket-result { color: var(--fd-blue); }
+div[data-testid="stExpander"] .ticket-result.live,
+div[data-testid="stExpander"] .ticket-card.settled-lost .ticket-result { color: #a62f29; }
+div[data-testid="stExpander"] .ticket-result.grading,
+div[data-testid="stExpander"] .ticket-card.settled-won .ticket-result { color: #295d35; }
 div[data-testid="stExpander"] div[role="radiogroup"] > label {
     border: 1px solid var(--fd-rule) !important;
     border-radius: 0 !important;
@@ -391,6 +406,19 @@ div[data-testid="stDialog"] .stButton > button[kind^="primary"] p { color: var(-
 .ticket-result.live i { display: inline-block; width: 6px; height: 6px; margin-right: 5px; border-radius: 50%; background: var(--fd-red); animation: live-pulse 1.4s ease-in-out infinite; }
 .ticket-result.grading { color: var(--fd-yellow); }
 @keyframes live-pulse { 0%, 100% { opacity: 1; } 50% { opacity: .25; } }
+div[class*="st-key-delete_bet_"] { margin: -.05rem 0 .85rem; }
+div[class*="st-key-delete_bet_"] .stButton > button {
+    min-height: 38px;
+    color: #ef8279;
+    border-color: rgba(239, 130, 121, .7);
+}
+div[class*="st-key-delete_bet_"] .stButton > button p { color: #ef8279 !important; }
+div[class*="st-key-delete_bet_"] .stButton > button:hover {
+    color: var(--fd-paper);
+    background: var(--fd-red);
+    border-color: var(--fd-red);
+}
+div[class*="st-key-delete_bet_"] .stButton > button:hover p { color: var(--fd-paper) !important; }
 .leader-row { display: grid; grid-template-columns: 48px minmax(0, 1fr) auto; align-items: center; gap: .8rem; padding: .8rem 0; margin: 0; background: transparent; border: 0; border-bottom: 1px solid var(--fd-rule); border-radius: 0; }
 .leader-row.is-you { background: rgba(242, 200, 75, .08); }
 .leader-rank { color: var(--fd-red); font: 400 1.5rem "Archivo Black", sans-serif; }
