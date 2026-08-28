@@ -353,7 +353,7 @@ def fetch_games(season: int, season_type: str, week: int) -> list[dict]:
         year=season,
         week=week,
         seasonType=season_type,
-        division="fbs",
+        classification="fbs",
     )
 
 

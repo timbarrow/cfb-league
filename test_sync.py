@@ -21,7 +21,7 @@ def test_games_feed_is_scoped_to_fbs(monkeypatch) -> None:
         "year": 2026,
         "week": 1,
         "seasonType": "regular",
-        "division": "fbs",
+        "classification": "fbs",
     }
 
 
