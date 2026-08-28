@@ -554,7 +554,8 @@ def load_data_status() -> dict:
             """select max(lines_updated_at) as lines_updated_at,
                       max(scores_updated_at) as scores_updated_at,
                       count(*) filter (where status = 'in_progress') as live_games
-                 from public.games""",
+                 from public.games
+                where classification = 'fbs'""",
         )
     return row or {"lines_updated_at": None, "scores_updated_at": None, "live_games": 0}
 
@@ -614,6 +615,7 @@ def ensure_runtime_schema() -> None:
         exec_(conn, "drop index if exists public.bets_one_open_per_market")
         exec_(conn, "alter table public.games add column if not exists lines_updated_at timestamptz")
         exec_(conn, "alter table public.games add column if not exists scores_updated_at timestamptz")
+        exec_(conn, "alter table public.games add column if not exists classification text")
         exec_(
             conn,
             """

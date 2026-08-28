@@ -34,6 +34,7 @@ create table if not exists public.games (
     season          integer     not null,
     week            integer     not null,
     season_type     text        not null default 'regular',   -- regular | postseason
+    classification  text,                              -- fbs rows power the league board/health
     start_date      timestamptz not null,             -- kickoff (UTC) — drives bet locking
     neutral_site    boolean     not null default false,
     home_team       text        not null,
@@ -66,6 +67,7 @@ create table if not exists public.games (
 -- Idempotent upgrades for leagues created with an earlier schema.
 alter table public.games add column if not exists lines_updated_at timestamptz;
 alter table public.games add column if not exists scores_updated_at timestamptz;
+alter table public.games add column if not exists classification text;
 
 create index if not exists games_week_idx       on public.games (season, season_type, week);
 create index if not exists games_start_date_idx on public.games (start_date);

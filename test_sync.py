@@ -6,6 +6,48 @@ import cfb_sync
 import pytest
 
 
+def test_games_feed_is_scoped_to_fbs(monkeypatch) -> None:
+    call = {}
+
+    def fake_get(path, **params):
+        call.update(path=path, **params)
+        return []
+
+    monkeypatch.setattr(cfb_sync, "api_get", fake_get)
+
+    assert cfb_sync.fetch_games(2026, "regular", 1) == []
+    assert call == {
+        "path": "games",
+        "year": 2026,
+        "week": 1,
+        "seasonType": "regular",
+        "division": "fbs",
+    }
+
+
+def test_daily_feed_does_not_infer_live_status_from_kickoff_time() -> None:
+    rows = cfb_sync.shape_rows(
+        [
+            {
+                "id": 101,
+                "season": 2026,
+                "week": 1,
+                "seasonType": "regular",
+                "startDate": "2026-08-27T12:00:00Z",
+                "homeTeam": "Home",
+                "awayTeam": "Away",
+                "completed": False,
+            }
+        ],
+        {},
+        {},
+        cfb_sync.datetime(2026, 8, 27, 23, 0, tzinfo=cfb_sync.timezone.utc),
+    )
+
+    assert rows[0]["status"] == "scheduled"
+    assert rows[0]["classification"] == "fbs"
+
+
 def test_draftkings_wins_when_it_has_both_markets(monkeypatch) -> None:
     monkeypatch.setattr(
         cfb_sync,

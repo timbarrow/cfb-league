@@ -53,6 +53,7 @@ def ensure_sync_schema() -> None:
     with tx() as conn:
         exec_(conn, "alter table public.games add column if not exists lines_updated_at timestamptz")
         exec_(conn, "alter table public.games add column if not exists scores_updated_at timestamptz")
+        exec_(conn, "alter table public.games add column if not exists classification text")
 
 
 # ---------------------------------------------------------------------------
@@ -347,7 +348,13 @@ def fetch_lines(season: int, season_type: str, week: int) -> dict[int, dict]:
 
 
 def fetch_games(season: int, season_type: str, week: int) -> list[dict]:
-    return api_get("games", year=season, week=week, seasonType=season_type)
+    return api_get(
+        "games",
+        year=season,
+        week=week,
+        seasonType=season_type,
+        division="fbs",
+    )
 
 
 def shape_rows(
@@ -372,12 +379,15 @@ def shape_rows(
         away_score = to_int(pick(g, "awayPoints", "away_points", "awayScore", "away_score"))
         completed = bool(pick(g, "completed", default=False))
 
-        if completed and home_score is not None and away_score is not None:
-            status = "completed"
-        elif start <= now:
-            status = "in_progress"
-        else:
-            status = "scheduled"
+        # The daily /games feed has no authoritative live state. Kickoff time
+        # alone is not proof that a game started (TBD times, postponements and
+        # delayed workflow runs all occur), so only the live scoreboard may
+        # move a non-final game to in_progress.
+        status = (
+            "completed"
+            if completed and home_score is not None and away_score is not None
+            else "scheduled"
+        )
 
         odds = lines.get(gid, {})
         rows.append(
@@ -386,6 +396,7 @@ def shape_rows(
                 "season": to_int(pick(g, "season")) or 0,
                 "week": to_int(pick(g, "week")) or 0,
                 "season_type": (pick(g, "seasonType", "season_type", default="regular") or "regular").lower(),
+                "classification": "fbs",
                 "start_date": start,
                 "neutral_site": bool(pick(g, "neutralSite", "neutral_site", default=False)),
                 "home_team": home,
@@ -412,11 +423,13 @@ def shape_rows(
 UPSERT_SQL = """
 insert into public.games (
     id, season, week, season_type, start_date, neutral_site,
+    classification,
     home_team, away_team, home_conference, away_conference,
     home_rank, away_rank, spread_home, total_line, lines_provider,
     status, home_score, away_score, lines_updated_at, scores_updated_at, updated_at
 ) values (
     :id, :season, :week, :season_type, :start_date, :neutral_site,
+    :classification,
     :home_team, :away_team, :home_conference, :away_conference,
     :home_rank, :away_rank, :spread_home, :total_line, :lines_provider,
     :status, :home_score, :away_score,
@@ -428,6 +441,7 @@ on conflict (id) do update set
     season          = excluded.season,
     week            = excluded.week,
     season_type     = excluded.season_type,
+    classification  = excluded.classification,
     start_date      = excluded.start_date,
     neutral_site    = excluded.neutral_site,
     home_team       = excluded.home_team,
@@ -544,6 +558,7 @@ update public.games
        scores_updated_at = now(),
        updated_at = now()
  where id = :id
+   and classification = 'fbs'
 """
 
 
