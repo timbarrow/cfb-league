@@ -2,6 +2,8 @@
 
 from __future__ import annotations
 
+from contextlib import nullcontext
+
 import cfb_sync
 import pytest
 
@@ -46,6 +48,38 @@ def test_daily_feed_does_not_infer_live_status_from_kickoff_time() -> None:
 
     assert rows[0]["status"] == "scheduled"
     assert rows[0]["classification"] == "fbs"
+
+
+def test_week_upsert_reconciles_stale_fbs_tags(monkeypatch) -> None:
+    calls = []
+    conn = object()
+    row = {
+        "id": 101,
+        "season": 2026,
+        "season_type": "regular",
+        "week": 1,
+        "classification": "fbs",
+        "status": "scheduled",
+        "home_score": None,
+        "away_score": None,
+    }
+
+    monkeypatch.setattr(cfb_sync, "tx", lambda: nullcontext(conn))
+    monkeypatch.setattr(cfb_sync, "try_advisory_lock", lambda *_args: True)
+    monkeypatch.setattr(
+        cfb_sync,
+        "exec_",
+        lambda _conn, sql, **params: calls.append((sql, params)),
+    )
+
+    assert cfb_sync.upsert_games([row]) == 1
+    assert "set classification = null" in calls[0][0]
+    assert calls[0][1] == {
+        "season": 2026,
+        "season_type": "regular",
+        "week": 1,
+    }
+    assert calls[1] == (cfb_sync.UPSERT_SQL, row)
 
 
 def test_draftkings_wins_when_it_has_both_markets(monkeypatch) -> None:

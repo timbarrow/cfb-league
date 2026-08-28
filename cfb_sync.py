@@ -484,6 +484,26 @@ def upsert_games(rows: list[dict]) -> int:
         if not try_advisory_lock(conn, LOCK_SYNC):
             log.warning("Another sync holds the lock; exiting cleanly.")
             return 0
+        # Treat the filtered /games response as the authoritative FBS set for
+        # each synced week. This also repairs rows tagged by older syncs that
+        # loaded every NCAA classification.
+        scopes = {
+            (row["season"], row["season_type"], row["week"])
+            for row in rows
+        }
+        for season, season_type, week in scopes:
+            exec_(
+                conn,
+                """update public.games
+                      set classification = null
+                    where season = :season
+                      and season_type = :season_type
+                      and week = :week
+                      and classification = 'fbs'""",
+                season=season,
+                season_type=season_type,
+                week=week,
+            )
         for row in rows:
             # Guard the CHECK constraint: a 'completed' row must carry scores.
             if row["status"] == "completed" and (
