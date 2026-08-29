@@ -1347,12 +1347,12 @@ def _render_live_scoreboard(games: list[dict]) -> None:
         probability_html = ""
         if probabilities:
             away_pct, home_pct = probabilities
-            probability_html = f"""
-                <div class="fd-win-prob" aria-label="Win probability: away {away_pct} percent, home {home_pct} percent">
-                    <div><span>Away {away_pct}%</span><span>Home {home_pct}%</span></div>
-                    <span class="fd-win-track"><i style="width:{away_pct}%"></i></span>
-                </div>
-            """
+            probability_html = (
+                f'<div class="fd-win-prob" aria-label="Win probability: away {away_pct} '
+                f'percent, home {home_pct} percent"><div><span>Away {away_pct}%</span>'
+                f'<span>Home {home_pct}%</span></div><span class="fd-win-track">'
+                f'<i style="width:{away_pct}%"></i></span></div>'
+            )
         st.markdown(
             f"""
             <div class="fd-live-game">
