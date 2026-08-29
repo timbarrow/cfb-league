@@ -2,27 +2,8 @@ name: CFB pipeline (sync odds + settle bets)
 
 on:
   schedule:
-    # All times are America/Chicago and restricted to football season
-    # (August–January), so daylight-saving changes are handled automatically.
     # Daily at 8:07 AM: games, rankings and DraftKings lines.
     - cron: "7 8 * 8-12,1 *"
-      timezone: "America/Chicago"
-    # Mon–Wed results: 8 PM, 10 PM and 11:59 PM.
-    - cron: "0 20,22 * 8-12,1 1-3"
-      timezone: "America/Chicago"
-    - cron: "59 23 * 8-12,1 1-3"
-      timezone: "America/Chicago"
-    # Thu–Fri results: about every seven minutes, 8 PM through midnight.
-    - cron: "*/7 20-23 * 8-12,1 4,5"
-      timezone: "America/Chicago"
-    - cron: "0 0 * 8-12,1 5,6"
-      timezone: "America/Chicago"
-    # Saturday 11 AM through Sunday 2 AM, then Sunday's 6 AM final sweep.
-    - cron: "*/7 11-23 * 8-12,1 6"
-      timezone: "America/Chicago"
-    - cron: "*/7 0-1 * 8-12,1 0"
-      timezone: "America/Chicago"
-    - cron: "0 2,6 * 8-12,1 0"
       timezone: "America/Chicago"
   workflow_dispatch:
     inputs:
@@ -64,11 +45,10 @@ jobs:
 
       - name: Refresh board or live results
         env:
-          SCHEDULE_EVENT: ${{ github.event.schedule }}
           EVENT_NAME: ${{ github.event_name }}
           SYNC_MODE: ${{ inputs.sync_mode }}
         run: |
-          if [ "$SYNC_MODE" = "daily" ] || { [ "$EVENT_NAME" = "schedule" ] && [ "$SCHEDULE_EVENT" = "7 8 * 8-12,1 *" ]; }; then
+          if [ "$SYNC_MODE" = "daily" ] || [ "$EVENT_NAME" = "schedule" ]; then
             python cfb_sync.py
           else
             python cfb_sync.py --live

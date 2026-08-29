@@ -22,7 +22,8 @@ a College Football Data **Tier 1** membership.
 | `test_settlement.py` | Grading + payout math tests (no DB needed) |
 | `test_experience.py` | Weekly recap, share-card and kickoff-window tests |
 | `integration_check.py` | End-to-end test against a scratch Postgres |
-| `.github/workflows/cfb-pipeline.yml` | Central-time line, live-score and settlement schedule |
+| `.github/workflows/cfb-pipeline.yml` | Daily Central-time games, rankings and odds schedule |
+| `.github/workflows/live-scores.yml` | Isolated live-score and settlement schedule |
 
 ---
 
