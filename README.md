@@ -99,6 +99,28 @@ it starts even if the page was left open.
 - Live runs use CFBD's Tier 1 `/scoreboard` endpoint in one API call, then grade
   completed tickets immediately.
 
+### Reliable two-minute live polling
+
+Production live scores are designed to run through Supabase Cron and the
+`cfb-live-scores` Edge Function in `supabase/functions/`. Cron invokes the
+function every two minutes; the function calls CFBD only during Central-time
+game windows, updates every loaded FBS game in one database RPC, and settles
+completed tickets transactionally. GitHub's `CFB live scores` workflow remains
+available as a manual fallback.
+
+Deployment requires the Supabase CLI and an authenticated project:
+
+```bash
+supabase link --project-ref YOUR_PROJECT_REF
+supabase db push
+supabase secrets set CFBD_API_KEY=...
+supabase functions deploy cfb-live-scores --no-verify-jwt
+```
+
+The migration creates the two-minute Cron job and generates its authentication
+secret inside Supabase Vault. The function's Central-time guard prevents
+off-window CFBD calls.
+
 GitHub's scheduler can start a job a few minutes late. Also, `*/7` produces
 `:00, :07, … :56`, followed by the next hour's `:00`, so the hour boundary is a
 four-minute interval.
@@ -216,7 +238,7 @@ python settle_bets.py --dry-run     # grade everything, write nothing
 |---|---|---|
 | Streamlit Community Cloud | unlimited public apps | 1 app, ~10 users |
 | Supabase | 500 MB DB | a few MB per season |
-| CFBD API | Tier 1 (5,000 calls/month) | ~1,100 calls in a busy month |
+| CFBD API | Tier 1 (5,000 calls/month) | ~3,500–4,000 calls in a five-week month |
 | GitHub Actions (**public repo**) | unlimited minutes | **$0** |
 | GitHub Actions (private repo) | 2,000 min/mo on Free | see below |
 

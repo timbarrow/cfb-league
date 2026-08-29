@@ -8,3 +8,4 @@ venv/
 .codex-spreadsheet-work/
 .codex-xlsx-compare/
 outputs/
+supabase/.temp/

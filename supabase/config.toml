@@ -1,0 +1,4 @@
+project_id = "cfb-league"
+
+[functions.cfb-live-scores]
+verify_jwt = false
