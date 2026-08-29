@@ -380,6 +380,20 @@ def game_progress(period, clock, status: str = "in_progress") -> str:
     return label
 
 
+def win_probabilities(game: dict) -> tuple[int, int] | None:
+    """Return display-ready away/home percentages that always total 100."""
+    try:
+        away = float(game.get("away_win_probability"))
+        home = float(game.get("home_win_probability"))
+    except (TypeError, ValueError):
+        return None
+    total = away + home
+    if total <= 0:
+        return None
+    away_pct = round(max(0.0, min(1.0, away / total)) * 100)
+    return away_pct, 100 - away_pct
+
+
 def kickoff_window(dt: datetime) -> tuple[str, str]:
     local = _as_local(dt)
     if local is None:
@@ -492,7 +506,8 @@ def load_live_games() -> list[dict]:
     select id, season, week, season_type, start_date, neutral_site,
            home_team, away_team, home_conference, away_conference,
            home_rank, away_rank, home_score, away_score, status,
-           game_period, game_clock, scores_updated_at
+           game_period, game_clock, game_possession,
+           home_win_probability, away_win_probability, scores_updated_at
       from public.games
      where status = 'in_progress'
        and classification = 'fbs'
@@ -511,7 +526,7 @@ def load_user_bets(user_id: str) -> list[dict]:
            b.status, b.payout_amount, b.created_at, b.settled_at,
            g.home_team, g.away_team, g.season, g.week, g.start_date,
            g.home_score, g.away_score, g.status as game_status,
-           g.game_period, g.game_clock, g.scores_updated_at,
+           g.game_period, g.game_clock, g.game_possession, g.scores_updated_at,
            (select min(first_game.start_date)
               from public.games first_game
              where first_game.season = g.season) as season_first_start
@@ -595,7 +610,7 @@ def load_all_bets() -> list[dict]:
            b.payout_multiplier, b.status, b.payout_amount, b.created_at,
            g.id as game_id, g.home_team, g.away_team, g.week, g.start_date,
            g.home_score, g.away_score, g.status as game_status,
-           g.game_period, g.game_clock, g.scores_updated_at
+           g.game_period, g.game_clock, g.game_possession, g.scores_updated_at
       from public.bets b
       join public.games g on g.id = b.game_id
      order by b.created_at desc
@@ -678,6 +693,9 @@ def ensure_runtime_schema() -> None:
         exec_(conn, "alter table public.games add column if not exists classification text")
         exec_(conn, "alter table public.games add column if not exists game_period integer")
         exec_(conn, "alter table public.games add column if not exists game_clock text")
+        exec_(conn, "alter table public.games add column if not exists game_possession text")
+        exec_(conn, "alter table public.games add column if not exists home_win_probability numeric(5,4)")
+        exec_(conn, "alter table public.games add column if not exists away_win_probability numeric(5,4)")
         exec_(
             conn,
             """
@@ -1322,17 +1340,31 @@ def _render_live_scoreboard(games: list[dict]) -> None:
     for game in games:
         separator = "VS" if game.get("neutral_site") else "AT"
         progress = game_progress(game.get("game_period"), game.get("game_clock"))
+        possession = str(game.get("game_possession") or "").lower()
+        away_ball = '<span class="fd-possession" title="Possession" aria-label="Possession">🏈</span>' if possession == "away" else ""
+        home_ball = '<span class="fd-possession" title="Possession" aria-label="Possession">🏈</span>' if possession == "home" else ""
+        probabilities = win_probabilities(game)
+        probability_html = ""
+        if probabilities:
+            away_pct, home_pct = probabilities
+            probability_html = f"""
+                <div class="fd-win-prob" aria-label="Win probability: away {away_pct} percent, home {home_pct} percent">
+                    <div><span>Away {away_pct}%</span><span>Home {home_pct}%</span></div>
+                    <span class="fd-win-track"><i style="width:{away_pct}%"></i></span>
+                </div>
+            """
         st.markdown(
             f"""
             <div class="fd-live-game">
                 <div class="fd-live-team">
-                    <span>{rank_html(game.get('away_rank'))}{escape(str(game['away_team']))}</span>
+                    <span>{rank_html(game.get('away_rank'))}{escape(str(game['away_team']))}{away_ball}</span>
                     <strong>{_score_value(game.get('away_score'))}</strong>
                 </div>
                 <div class="fd-live-team">
-                    <span>{rank_html(game.get('home_rank'))}{escape(str(game['home_team']))}</span>
+                    <span>{rank_html(game.get('home_rank'))}{escape(str(game['home_team']))}{home_ball}</span>
                     <strong>{_score_value(game.get('home_score'))}</strong>
                 </div>
+                {probability_html}
                 <div class="fd-live-meta"><strong>{escape(progress)}</strong> · {separator} · Week {game['week']} · Scores refresh automatically</div>
             </div>
             """,
@@ -1628,11 +1660,19 @@ def render_ticket_cards(
     for bet in rows:
         wager = money(bet["wager_amount"])
         matchup = f"{bet['away_team']} @ {bet['home_team']}"
+        matchup_html = escape(matchup)
         if not settled:
             potential = money(wager * Decimal(str(bet["payout_multiplier"])))
             game_status = str(bet.get("game_status") or "scheduled")
             if game_status == "in_progress":
                 progress = game_progress(bet.get("game_period"), bet.get("game_clock"))
+                possession = str(bet.get("game_possession") or "").lower()
+                away_ball = '<span class="fd-possession" title="Possession" aria-label="Possession">🏈</span>' if possession == "away" else ""
+                home_ball = '<span class="fd-possession" title="Possession" aria-label="Possession">🏈</span>' if possession == "home" else ""
+                matchup_html = (
+                    f"{escape(str(bet['away_team']))}{away_ball} @ "
+                    f"{escape(str(bet['home_team']))}{home_ball}"
+                )
                 score = (
                     f"{bet['away_team']} {bet['away_score']}–{bet['home_score']} {bet['home_team']}"
                     if bet.get("home_score") is not None and bet.get("away_score") is not None
@@ -1675,7 +1715,7 @@ def render_ticket_cards(
             <div class="ticket-card {card_class}">
                 <div>
                     <div class="ticket-pick">{escape(describe_bet(bet))}{result}</div>
-                    <div class="ticket-game">{escape(matchup)}</div>
+                    <div class="ticket-game">{matchup_html}</div>
                 </div>
                 <div class="ticket-money"><strong>{money_value}</strong><span>{money_label}</span></div>
                 <div class="ticket-meta">{escape(detail)} · Staked {fmt_money(wager)}</div>

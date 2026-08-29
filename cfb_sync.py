@@ -56,6 +56,9 @@ def ensure_sync_schema() -> None:
         exec_(conn, "alter table public.games add column if not exists classification text")
         exec_(conn, "alter table public.games add column if not exists game_period integer")
         exec_(conn, "alter table public.games add column if not exists game_clock text")
+        exec_(conn, "alter table public.games add column if not exists game_possession text")
+        exec_(conn, "alter table public.games add column if not exists home_win_probability numeric(5,4)")
+        exec_(conn, "alter table public.games add column if not exists away_win_probability numeric(5,4)")
 
 
 # ---------------------------------------------------------------------------
@@ -554,6 +557,9 @@ def shape_live_rows(payload: Iterable[dict]) -> list[dict]:
         game_period = to_int(pick(game, "period"))
         raw_clock = pick(game, "clock")
         game_clock = str(raw_clock).strip() if raw_clock is not None else None
+        possession = str(pick(game, "possession", default="") or "").strip().lower() or None
+        home_win_probability = pick(home, "winProbability", "win_probability")
+        away_win_probability = pick(away, "winProbability", "win_probability")
         status = _live_status(game)
         if gid is None:
             continue
@@ -567,6 +573,9 @@ def shape_live_rows(payload: Iterable[dict]) -> list[dict]:
                 "away_score": away_score,
                 "game_period": game_period,
                 "game_clock": game_clock,
+                "game_possession": possession,
+                "home_win_probability": home_win_probability,
+                "away_win_probability": away_win_probability,
             }
         )
     return rows
@@ -578,6 +587,9 @@ update public.games
        away_score = coalesce(:away_score, away_score),
        game_period = coalesce(:game_period, game_period),
        game_clock = coalesce(:game_clock, game_clock),
+       game_possession = coalesce(:game_possession, game_possession),
+       home_win_probability = coalesce(:home_win_probability, home_win_probability),
+       away_win_probability = coalesce(:away_win_probability, away_win_probability),
        status = case
            when status = 'completed' then 'completed'
            when :status = 'completed' then 'completed'

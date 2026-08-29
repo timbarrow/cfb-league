@@ -153,8 +153,9 @@ def test_live_scoreboard_shapes_camel_and_snake_case() -> None:
                 "status": "In Progress",
                 "period": 3,
                 "clock": "08:42",
-                "homeTeam": {"points": 21},
-                "awayTeam": {"points": 17},
+                "possession": "away",
+                "homeTeam": {"points": 21, "winProbability": 0.64},
+                "awayTeam": {"points": 17, "winProbability": 0.36},
             },
             {
                 "game_id": 102,
@@ -171,10 +172,14 @@ def test_live_scoreboard_shapes_camel_and_snake_case() -> None:
         {
             "id": 101, "status": "in_progress", "home_score": 21, "away_score": 17,
             "game_period": 3, "game_clock": "08:42",
+            "game_possession": "away", "home_win_probability": 0.64,
+            "away_win_probability": 0.36,
         },
         {
             "id": 102, "status": "completed", "home_score": 31, "away_score": 24,
             "game_period": 4, "game_clock": "00:00",
+            "game_possession": None, "home_win_probability": None,
+            "away_win_probability": None,
         },
     ]
 

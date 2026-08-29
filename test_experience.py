@@ -92,6 +92,16 @@ def test_game_progress_formats_quarters_halftime_and_overtime() -> None:
     assert app.game_progress(4, "00:00", "completed") == "Final"
 
 
+def test_win_probabilities_normalize_and_total_one_hundred() -> None:
+    assert app.win_probabilities(
+        {"away_win_probability": Decimal("0.394"), "home_win_probability": Decimal("0.606")}
+    ) == (39, 61)
+    assert app.win_probabilities(
+        {"away_win_probability": 2, "home_win_probability": 3}
+    ) == (40, 60)
+    assert app.win_probabilities({}) is None
+
+
 def test_ticket_delete_window_closes_at_first_kickoff() -> None:
     kickoff = datetime(2026, 8, 29, 16, 0, tzinfo=timezone.utc)
     ticket = {"status": "pending", "season_first_start": kickoff}

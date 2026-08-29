@@ -261,6 +261,29 @@ div[data-testid="stMainBlockContainer"]:has(.fd-auth-card) { max-width: 880px; }
     text-transform: uppercase;
 }
 .fd-live-team strong { color: var(--fd-yellow); font-size: 1.45em; }
+.fd-possession {
+    display: inline-block;
+    margin-left: .45rem;
+    font: 1rem/1 sans-serif;
+    vertical-align: .08em;
+    filter: saturate(.8);
+}
+.fd-win-prob { margin: .45rem 0 .25rem; }
+.fd-win-prob > div {
+    display: flex;
+    justify-content: space-between;
+    margin-bottom: .2rem;
+    color: #cad2cc;
+    font: 500 .5rem "IBM Plex Mono", monospace;
+    text-transform: uppercase;
+}
+.fd-win-track {
+    display: block;
+    height: 5px;
+    overflow: hidden;
+    background: var(--fd-blue);
+}
+.fd-win-track i { display: block; height: 100%; background: var(--fd-yellow); }
 .fd-live-meta { margin-top: .35rem; color: #efaaa5; font: 500 .55rem "IBM Plex Mono", monospace; text-transform: uppercase; }
 .fd-live-meta strong { color: var(--fd-yellow); font-weight: 600; }
 .fd-live-empty {
