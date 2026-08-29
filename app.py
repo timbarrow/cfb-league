@@ -464,6 +464,22 @@ def load_upcoming_games() -> list[dict]:
 
 
 @st.cache_data(ttl=15, show_spinner=False)
+def load_live_games() -> list[dict]:
+    """All FBS games currently marked live, newest score refresh first."""
+    sql = """
+    select id, season, week, season_type, start_date, neutral_site,
+           home_team, away_team, home_conference, away_conference,
+           home_rank, away_rank, home_score, away_score, status,
+           scores_updated_at
+      from public.games
+     where status = 'in_progress'
+     order by start_date, home_team
+    """
+    with ro() as conn:
+        return q(conn, sql)
+
+
+@st.cache_data(ttl=15, show_spinner=False)
 def load_user_bets(user_id: str) -> list[dict]:
     sql = """
     select b.id, b.bet_type, b.line_placed, b.wager_amount, b.payout_multiplier,
@@ -591,6 +607,7 @@ def load_weekly_recap_bets() -> list[dict]:
 
 def refresh_data() -> None:
     load_upcoming_games.clear()
+    load_live_games.clear()
     load_user_bets.clear()
     load_leaderboard.clear()
     load_weekly_standings.clear()
@@ -1238,6 +1255,64 @@ def _render_game_card(game: dict, options: list[tuple[str, Decimal, str]]) -> No
                 )
 
 
+def _score_value(score) -> str:
+    """Keep a missing early-game score honest instead of displaying zero."""
+    return "—" if score is None else str(int(score))
+
+
+def _render_live_scoreboard(games: list[dict]) -> None:
+    latest_update = max(
+        (game.get("scores_updated_at") for game in games if game.get("scores_updated_at")),
+        default=None,
+    )
+    st.markdown(
+        f"""
+        <div class="fd-live-head">
+            <div><span class="fd-live-dot"></span><strong>Live now</strong></div>
+            <span>{len(games)} game{'s' if len(games) != 1 else ''} · {_freshness_label(latest_update)}</span>
+        </div>
+        """,
+        unsafe_allow_html=True,
+    )
+    for game in games:
+        separator = "VS" if game.get("neutral_site") else "AT"
+        st.markdown(
+            f"""
+            <div class="fd-live-game">
+                <div class="fd-live-team">
+                    <span>{rank_html(game.get('away_rank'))}{escape(str(game['away_team']))}</span>
+                    <strong>{_score_value(game.get('away_score'))}</strong>
+                </div>
+                <div class="fd-live-team">
+                    <span>{rank_html(game.get('home_rank'))}{escape(str(game['home_team']))}</span>
+                    <strong>{_score_value(game.get('home_score'))}</strong>
+                </div>
+                <div class="fd-live-meta">LIVE · {separator} · Week {game['week']} · Scores refresh automatically</div>
+            </div>
+            """,
+            unsafe_allow_html=True,
+        )
+
+
+@st.fragment(run_every="30s")
+def _render_live_section() -> None:
+    """Refresh the first-screen scoreboard without rerunning the whole app."""
+    games = load_live_games()
+    show_live = st.toggle(
+        f"Show live games ({len(games)})",
+        value=True,
+        key="f_show_live",
+        help="Hide or restore the live scoreboard without changing the betting board.",
+    )
+    if show_live and games:
+        _render_live_scoreboard(games)
+    elif show_live:
+        st.markdown(
+            "<div class='fd-live-empty'>No games are in progress right now.</div>",
+            unsafe_allow_html=True,
+        )
+
+
 def _render_bet_slip(user: dict, balance: Decimal, *, key_prefix: str = "") -> None:
     flash = st.session_state.pop("bet_flash", None)
     if flash:
@@ -1345,23 +1420,27 @@ def _bet_dialog(user: dict, balance: Decimal) -> None:
 
 def tab_place_bets(user: dict, balance: Decimal) -> None:
     games = load_upcoming_games()
-    if not games:
-        st.info(
-            "No upcoming games are loaded. The next sync will add the weekly card "
-            "as soon as lines are available."
-        )
-        return
+    live_games = load_live_games()
 
-    wk = games[0]
+    wk = games[0] if games else (live_games[0] if live_games else None)
     st.markdown(
         f"""
         <div class="fd-board-head">
-            <h2>Week {wk['week']} board</h2>
-            <div class="fd-board-meta">{wk['season']} {escape(str(wk['season_type']))}<br>All times Central · Lines lock at kickoff</div>
+            <h2>{f"Week {wk['week']} board" if wk else "The board"}</h2>
+            <div class="fd-board-meta">{f"{wk['season']} {escape(str(wk['season_type']))}" if wk else "Season schedule"}<br>All times Central · Lines lock at kickoff</div>
         </div>
         """,
         unsafe_allow_html=True,
     )
+
+    _render_live_section()
+
+    if not games:
+        st.info(
+            "No upcoming games are loaded. The next sync will add the betting card "
+            "as soon as lines are available."
+        )
+        return
 
     conferences = sorted(
         {c for game in games for c in (game["home_conference"], game["away_conference"]) if c}

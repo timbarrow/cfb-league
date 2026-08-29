@@ -220,6 +220,56 @@ div[data-testid="stMainBlockContainer"]:has(.fd-auth-card) { max-width: 880px; }
 .fd-board-head h2 { margin: 0; color: var(--fd-yellow); font-size: clamp(2.4rem, 7vw, 4.6rem); line-height: .92; }
 .fd-board-meta { color: var(--fd-paper); font: 500 .62rem/1.55 "IBM Plex Mono", monospace; text-align: right; text-transform: uppercase; }
 .fd-board-summary { margin: .75rem 0 1rem; color: #cad2cc; font: 500 .63rem "IBM Plex Mono", monospace; text-transform: uppercase; }
+.fd-live-head {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    gap: 1rem;
+    min-height: 48px;
+    margin: .45rem 0 0;
+    padding: .65rem .8rem;
+    color: var(--fd-paper);
+    background: var(--fd-red);
+    border: 1px solid var(--fd-paper);
+    font: 500 .58rem "IBM Plex Mono", monospace;
+    text-transform: uppercase;
+}
+.fd-live-head > div { display: flex; align-items: center; gap: .55rem; }
+.fd-live-head strong { font: 400 1rem "Archivo Black", sans-serif; }
+.fd-live-dot {
+    width: 8px;
+    height: 8px;
+    border-radius: 50%;
+    background: var(--fd-paper);
+    box-shadow: 0 0 0 4px rgba(247, 243, 232, .2);
+    animation: live-pulse 1.4s ease-in-out infinite;
+}
+.fd-live-game {
+    padding: .7rem .85rem;
+    color: var(--fd-paper);
+    background: rgba(200, 67, 59, .12);
+    border: 1px solid var(--fd-red);
+    border-top: 0;
+}
+.fd-live-team {
+    display: grid;
+    grid-template-columns: minmax(0, 1fr) auto;
+    align-items: baseline;
+    gap: 1rem;
+    padding: .2rem 0;
+    font: 400 clamp(1rem, 3vw, 1.35rem) "Archivo Black", sans-serif;
+    text-transform: uppercase;
+}
+.fd-live-team strong { color: var(--fd-yellow); font-size: 1.45em; }
+.fd-live-meta { margin-top: .35rem; color: #efaaa5; font: 500 .55rem "IBM Plex Mono", monospace; text-transform: uppercase; }
+.fd-live-empty {
+    margin: .45rem 0 .8rem;
+    padding: .7rem .85rem;
+    color: #cad2cc;
+    border: 1px dashed var(--fd-rule);
+    font: 500 .58rem "IBM Plex Mono", monospace;
+    text-transform: uppercase;
+}
 .fd-trust-strip {
     display: grid;
     grid-template-columns: repeat(3, 1fr);

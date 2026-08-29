@@ -77,6 +77,12 @@ def test_kickoff_windows_and_countdown_are_simple() -> None:
     ) == "1h 30m"
 
 
+def test_live_score_value_preserves_zero_and_marks_missing() -> None:
+    assert app._score_value(0) == "0"
+    assert app._score_value(21) == "21"
+    assert app._score_value(None) == "—"
+
+
 def test_ticket_delete_window_closes_at_first_kickoff() -> None:
     kickoff = datetime(2026, 8, 29, 16, 0, tzinfo=timezone.utc)
     ticket = {"status": "pending", "season_first_start": kickoff}
