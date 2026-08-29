@@ -54,6 +54,8 @@ def ensure_sync_schema() -> None:
         exec_(conn, "alter table public.games add column if not exists lines_updated_at timestamptz")
         exec_(conn, "alter table public.games add column if not exists scores_updated_at timestamptz")
         exec_(conn, "alter table public.games add column if not exists classification text")
+        exec_(conn, "alter table public.games add column if not exists game_period integer")
+        exec_(conn, "alter table public.games add column if not exists game_clock text")
 
 
 # ---------------------------------------------------------------------------
@@ -549,6 +551,9 @@ def shape_live_rows(payload: Iterable[dict]) -> list[dict]:
         away = pick(game, "awayTeam", "away_team", default={}) or {}
         home_score = to_int(pick(home, "points", "score"))
         away_score = to_int(pick(away, "points", "score"))
+        game_period = to_int(pick(game, "period"))
+        raw_clock = pick(game, "clock")
+        game_clock = str(raw_clock).strip() if raw_clock is not None else None
         status = _live_status(game)
         if gid is None:
             continue
@@ -560,6 +565,8 @@ def shape_live_rows(payload: Iterable[dict]) -> list[dict]:
                 "status": status,
                 "home_score": home_score,
                 "away_score": away_score,
+                "game_period": game_period,
+                "game_clock": game_clock,
             }
         )
     return rows
@@ -569,6 +576,8 @@ LIVE_UPDATE_SQL = """
 update public.games
    set home_score = coalesce(:home_score, home_score),
        away_score = coalesce(:away_score, away_score),
+       game_period = coalesce(:game_period, game_period),
+       game_clock = coalesce(:game_clock, game_clock),
        status = case
            when status = 'completed' then 'completed'
            when :status = 'completed' then 'completed'

@@ -358,6 +358,28 @@ def _kickoff_countdown(dt: datetime | None, now: datetime | None = None) -> str:
     return f"{minutes}m"
 
 
+def game_progress(period, clock, status: str = "in_progress") -> str:
+    """Broadcast-style game position such as Q3 · 8:42 or 2OT."""
+    if status == "completed":
+        return "Final"
+    try:
+        number = int(period) if period is not None else 0
+    except (TypeError, ValueError):
+        number = 0
+    if number <= 0:
+        return "Live"
+    label = f"Q{number}" if number <= 4 else ("OT" if number == 5 else f"{number - 4}OT")
+    clock_text = str(clock or "").strip()
+    if number == 2 and clock_text in {"0:00", "00:00"}:
+        return "Halftime"
+    if clock_text:
+        parts = clock_text.split(":", 1)
+        if len(parts) == 2 and parts[0].isdigit():
+            clock_text = f"{int(parts[0])}:{parts[1]}"
+        return f"{label} · {clock_text}"
+    return label
+
+
 def kickoff_window(dt: datetime) -> tuple[str, str]:
     local = _as_local(dt)
     if local is None:
@@ -470,7 +492,7 @@ def load_live_games() -> list[dict]:
     select id, season, week, season_type, start_date, neutral_site,
            home_team, away_team, home_conference, away_conference,
            home_rank, away_rank, home_score, away_score, status,
-           scores_updated_at
+           game_period, game_clock, scores_updated_at
       from public.games
      where status = 'in_progress'
        and classification = 'fbs'
@@ -489,7 +511,7 @@ def load_user_bets(user_id: str) -> list[dict]:
            b.status, b.payout_amount, b.created_at, b.settled_at,
            g.home_team, g.away_team, g.season, g.week, g.start_date,
            g.home_score, g.away_score, g.status as game_status,
-           g.scores_updated_at,
+           g.game_period, g.game_clock, g.scores_updated_at,
            (select min(first_game.start_date)
               from public.games first_game
              where first_game.season = g.season) as season_first_start
@@ -506,6 +528,23 @@ def load_user_bets(user_id: str) -> list[dict]:
 def load_leaderboard() -> list[dict]:
     with ro() as conn:
         return q(conn, "select * from public.leaderboard order by net_worth desc, username")
+
+
+@st.cache_data(ttl=30, show_spinner=False)
+def load_completed_games() -> list[dict]:
+    """Completed FBS games for the latest season in the league database."""
+    sql = """
+    select id, season, week, season_type, start_date, neutral_site,
+           home_team, away_team, home_conference, away_conference,
+           home_rank, away_rank, home_score, away_score, scores_updated_at
+      from public.games
+     where status = 'completed'
+       and classification = 'fbs'
+       and season = (select max(season) from public.games where classification = 'fbs')
+     order by week desc, start_date desc, home_team
+    """
+    with ro() as conn:
+        return q(conn, sql)
 
 
 @st.cache_data(ttl=30, show_spinner=False)
@@ -556,7 +595,7 @@ def load_all_bets() -> list[dict]:
            b.payout_multiplier, b.status, b.payout_amount, b.created_at,
            g.id as game_id, g.home_team, g.away_team, g.week, g.start_date,
            g.home_score, g.away_score, g.status as game_status,
-           g.scores_updated_at
+           g.game_period, g.game_clock, g.scores_updated_at
       from public.bets b
       join public.games g on g.id = b.game_id
      order by b.created_at desc
@@ -613,6 +652,7 @@ def refresh_data() -> None:
     load_live_games.clear()
     load_user_bets.clear()
     load_leaderboard.clear()
+    load_completed_games.clear()
     load_weekly_standings.clear()
     load_all_bets.clear()
     load_data_status.clear()
@@ -636,6 +676,8 @@ def ensure_runtime_schema() -> None:
         exec_(conn, "alter table public.games add column if not exists lines_updated_at timestamptz")
         exec_(conn, "alter table public.games add column if not exists scores_updated_at timestamptz")
         exec_(conn, "alter table public.games add column if not exists classification text")
+        exec_(conn, "alter table public.games add column if not exists game_period integer")
+        exec_(conn, "alter table public.games add column if not exists game_clock text")
         exec_(
             conn,
             """
@@ -1279,6 +1321,7 @@ def _render_live_scoreboard(games: list[dict]) -> None:
     )
     for game in games:
         separator = "VS" if game.get("neutral_site") else "AT"
+        progress = game_progress(game.get("game_period"), game.get("game_clock"))
         st.markdown(
             f"""
             <div class="fd-live-game">
@@ -1290,7 +1333,7 @@ def _render_live_scoreboard(games: list[dict]) -> None:
                     <span>{rank_html(game.get('home_rank'))}{escape(str(game['home_team']))}</span>
                     <strong>{_score_value(game.get('home_score'))}</strong>
                 </div>
-                <div class="fd-live-meta">LIVE · {separator} · Week {game['week']} · Scores refresh automatically</div>
+                <div class="fd-live-meta"><strong>{escape(progress)}</strong> · {separator} · Week {game['week']} · Scores refresh automatically</div>
             </div>
             """,
             unsafe_allow_html=True,
@@ -1589,14 +1632,15 @@ def render_ticket_cards(
             potential = money(wager * Decimal(str(bet["payout_multiplier"])))
             game_status = str(bet.get("game_status") or "scheduled")
             if game_status == "in_progress":
+                progress = game_progress(bet.get("game_period"), bet.get("game_clock"))
                 score = (
                     f"{bet['away_team']} {bet['away_score']}–{bet['home_score']} {bet['home_team']}"
                     if bet.get("home_score") is not None and bet.get("away_score") is not None
                     else "Score pending"
                 )
-                detail = f"LIVE · {score}"
+                detail = f"{progress} · {score}"
                 card_class = "ticket-live"
-                result = "<span class='ticket-result live'><i></i>LIVE</span>"
+                result = f"<span class='ticket-result live'><i></i>{escape(progress)}</span>"
             elif game_status == "completed":
                 score = (
                     f"{bet['away_score']}–{bet['home_score']} final"
@@ -1728,7 +1772,73 @@ def tab_my_tickets(user: dict, balance: Decimal) -> None:
 
 
 # =====================================================================
-# Tab 3 — Leaderboard & Rival Tracker
+# Tab 3 — Final scores
+# =====================================================================
+@st.fragment(run_every=30)
+def tab_results() -> None:
+    games = load_completed_games()
+    st.markdown(
+        "<div class='fd-view-head'><h2>Results</h2><p>Every completed FBS game on the league board</p></div>",
+        unsafe_allow_html=True,
+    )
+    if not games:
+        st.info("Final scores will appear here as games finish.")
+        return
+
+    weeks = sorted({int(game["week"]) for game in games}, reverse=True)
+    filter_col, search_col = st.columns([1, 2])
+    with filter_col:
+        week_pick = st.selectbox(
+            "Week",
+            ["All weeks", *[f"Week {week}" for week in weeks]],
+            key="results_week",
+        )
+    with search_col:
+        team_search = st.text_input(
+            "Find a team",
+            key="results_team",
+            placeholder="e.g. TCU",
+        )
+
+    visible = games
+    if week_pick != "All weeks":
+        selected_week = int(str(week_pick).split()[-1])
+        visible = [game for game in visible if int(game["week"]) == selected_week]
+    if team_search.strip():
+        needle = team_search.strip().casefold()
+        visible = [
+            game for game in visible
+            if needle in str(game["away_team"]).casefold()
+            or needle in str(game["home_team"]).casefold()
+        ]
+
+    st.markdown(
+        f"<div class='fd-board-summary'>{len(visible)} final{'s' if len(visible) != 1 else ''} shown</div>",
+        unsafe_allow_html=True,
+    )
+    if not visible:
+        st.warning("No final scores match those filters.")
+        return
+
+    for game in visible:
+        away_score = int(game["away_score"])
+        home_score = int(game["home_score"])
+        away_class = " winner" if away_score > home_score else ""
+        home_class = " winner" if home_score > away_score else ""
+        st.markdown(
+            f"""
+            <div class="fd-result-card">
+                <div class="fd-result-meta">Final · Week {game['week']} · {_safe_kickoff(game['start_date'])}</div>
+                <div class="fd-result-team{away_class}"><span>{rank_html(game.get('away_rank'))}{escape(str(game['away_team']))}</span><strong>{away_score}</strong></div>
+                <div class="fd-result-team{home_class}"><span>{rank_html(game.get('home_rank'))}{escape(str(game['home_team']))}</span><strong>{home_score}</strong></div>
+            </div>
+            """,
+            unsafe_allow_html=True,
+        )
+
+
+# =====================================================================
+# Tab 4 — Leaderboard & Rival Tracker
 # =====================================================================
 def build_weekly_recap(ticket_rows: list[dict], weekly_rows: list[dict]) -> dict | None:
     """Create deterministic recap awards from public league data."""
@@ -2281,12 +2391,14 @@ def main() -> None:
     except Exception as exc:  # noqa: BLE001
         st.warning(f"Automation status is temporarily unavailable: {exc}")
 
-    t1, t2, t3 = st.tabs(["The board", "My tickets", "Standings"])
+    t1, t2, t3, t4 = st.tabs(["The board", "My tickets", "Results", "Standings"])
     with t1:
         tab_place_bets(user, balance)
     with t2:
         tab_my_tickets(user, balance)
     with t3:
+        tab_results()
+    with t4:
         tab_leaderboard(user)
 
     refresh_col, signout_col = st.columns([1, 1])

@@ -262,6 +262,7 @@ div[data-testid="stMainBlockContainer"]:has(.fd-auth-card) { max-width: 880px; }
 }
 .fd-live-team strong { color: var(--fd-yellow); font-size: 1.45em; }
 .fd-live-meta { margin-top: .35rem; color: #efaaa5; font: 500 .55rem "IBM Plex Mono", monospace; text-transform: uppercase; }
+.fd-live-meta strong { color: var(--fd-yellow); font-weight: 600; }
 .fd-live-empty {
     margin: .45rem 0 .8rem;
     padding: .7rem .85rem;
@@ -270,6 +271,31 @@ div[data-testid="stMainBlockContainer"]:has(.fd-auth-card) { max-width: 880px; }
     font: 500 .58rem "IBM Plex Mono", monospace;
     text-transform: uppercase;
 }
+.fd-result-card {
+    padding: .8rem .9rem;
+    border: 1px solid var(--fd-rule);
+    border-left: 4px solid var(--fd-blue);
+    border-bottom: 0;
+}
+.fd-result-card:last-child { border-bottom: 1px solid var(--fd-rule); }
+.fd-result-meta {
+    margin-bottom: .45rem;
+    color: #cad2cc;
+    font: 500 .55rem "IBM Plex Mono", monospace;
+    text-transform: uppercase;
+}
+.fd-result-team {
+    display: grid;
+    grid-template-columns: minmax(0, 1fr) auto;
+    align-items: baseline;
+    gap: 1rem;
+    color: #aebbb2;
+    font: 400 clamp(.95rem, 3vw, 1.25rem) "Archivo Black", sans-serif;
+    text-transform: uppercase;
+}
+.fd-result-team strong { font-size: 1.35em; }
+.fd-result-team.winner { color: var(--fd-paper); }
+.fd-result-team.winner strong { color: var(--fd-yellow); }
 .fd-trust-strip {
     display: grid;
     grid-template-columns: repeat(3, 1fr);

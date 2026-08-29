@@ -152,12 +152,15 @@ def test_live_scoreboard_shapes_camel_and_snake_case() -> None:
                 "id": 101,
                 "status": "In Progress",
                 "period": 3,
+                "clock": "08:42",
                 "homeTeam": {"points": 21},
                 "awayTeam": {"points": 17},
             },
             {
                 "game_id": 102,
                 "status": "Final",
+                "period": 4,
+                "clock": "00:00",
                 "home_team": {"score": 31},
                 "away_team": {"score": 24},
             },
@@ -165,8 +168,14 @@ def test_live_scoreboard_shapes_camel_and_snake_case() -> None:
     )
 
     assert rows == [
-        {"id": 101, "status": "in_progress", "home_score": 21, "away_score": 17},
-        {"id": 102, "status": "completed", "home_score": 31, "away_score": 24},
+        {
+            "id": 101, "status": "in_progress", "home_score": 21, "away_score": 17,
+            "game_period": 3, "game_clock": "08:42",
+        },
+        {
+            "id": 102, "status": "completed", "home_score": 31, "away_score": 24,
+            "game_period": 4, "game_clock": "00:00",
+        },
     ]
 
 

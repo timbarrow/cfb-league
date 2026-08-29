@@ -83,6 +83,15 @@ def test_live_score_value_preserves_zero_and_marks_missing() -> None:
     assert app._score_value(None) == "—"
 
 
+def test_game_progress_formats_quarters_halftime_and_overtime() -> None:
+    assert app.game_progress(3, "08:42") == "Q3 · 8:42"
+    assert app.game_progress(2, "00:00") == "Halftime"
+    assert app.game_progress(5, "12:10") == "OT · 12:10"
+    assert app.game_progress(6, None) == "2OT"
+    assert app.game_progress(None, None) == "Live"
+    assert app.game_progress(4, "00:00", "completed") == "Final"
+
+
 def test_ticket_delete_window_closes_at_first_kickoff() -> None:
     kickoff = datetime(2026, 8, 29, 16, 0, tzinfo=timezone.utc)
     ticket = {"status": "pending", "season_first_start": kickoff}

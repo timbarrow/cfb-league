@@ -50,6 +50,8 @@ create table if not exists public.games (
     status          text        not null default 'scheduled',  -- scheduled | in_progress | completed
     home_score      integer,
     away_score      integer,
+    game_period     integer,
+    game_clock      text,
     scores_updated_at timestamptz,
     updated_at      timestamptz not null default now(),
     constraint games_status_chk      check (status in ('scheduled','in_progress','completed')),
@@ -68,6 +70,8 @@ create table if not exists public.games (
 alter table public.games add column if not exists lines_updated_at timestamptz;
 alter table public.games add column if not exists scores_updated_at timestamptz;
 alter table public.games add column if not exists classification text;
+alter table public.games add column if not exists game_period integer;
+alter table public.games add column if not exists game_clock text;
 
 create index if not exists games_week_idx       on public.games (season, season_type, week);
 create index if not exists games_start_date_idx on public.games (start_date);
