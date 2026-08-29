@@ -26,6 +26,13 @@ on:
       timezone: "America/Chicago"
   workflow_dispatch:
     inputs:
+      sync_mode:
+        description: "Data refresh to run"
+        type: choice
+        options:
+          - live
+          - daily
+        default: live
       dry_run:
         description: "Grade bets without writing"
         type: boolean
@@ -59,8 +66,9 @@ jobs:
         env:
           SCHEDULE_EVENT: ${{ github.event.schedule }}
           EVENT_NAME: ${{ github.event_name }}
+          SYNC_MODE: ${{ inputs.sync_mode }}
         run: |
-          if [ "$EVENT_NAME" = "workflow_dispatch" ] || [ "$SCHEDULE_EVENT" = "7 8 * 8-12,1 *" ]; then
+          if [ "$SYNC_MODE" = "daily" ] || { [ "$EVENT_NAME" = "schedule" ] && [ "$SCHEDULE_EVENT" = "7 8 * 8-12,1 *" ]; }; then
             python cfb_sync.py
           else
             python cfb_sync.py --live

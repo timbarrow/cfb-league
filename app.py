@@ -473,6 +473,9 @@ def load_live_games() -> list[dict]:
            scores_updated_at
       from public.games
      where status = 'in_progress'
+       and classification = 'fbs'
+       and home_score is not null
+       and away_score is not null
      order by start_date, home_team
     """
     with ro() as conn:
