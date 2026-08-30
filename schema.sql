@@ -53,6 +53,7 @@ create table if not exists public.games (
     game_period     integer,
     game_clock      text,
     game_possession text,
+    game_situation  text,
     home_win_probability numeric(5,4),
     away_win_probability numeric(5,4),
     scores_updated_at timestamptz,
@@ -76,6 +77,7 @@ alter table public.games add column if not exists classification text;
 alter table public.games add column if not exists game_period integer;
 alter table public.games add column if not exists game_clock text;
 alter table public.games add column if not exists game_possession text;
+alter table public.games add column if not exists game_situation text;
 alter table public.games add column if not exists home_win_probability numeric(5,4);
 alter table public.games add column if not exists away_win_probability numeric(5,4);
 

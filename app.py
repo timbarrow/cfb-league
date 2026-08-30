@@ -283,6 +283,11 @@ def fmt_money(v) -> str:
     return f"-${abs(d):,.2f}" if d < 0 else f"${d:,.2f}"
 
 
+def fmt_money_change(v) -> str:
+    d = money(v)
+    return f"+{fmt_money(d)}" if d > 0 else fmt_money(d)
+
+
 def fmt_line(v) -> str:
     """+3.5 / -7 / PK"""
     d = Decimal(str(v))
@@ -506,7 +511,7 @@ def load_live_games() -> list[dict]:
     select id, season, week, season_type, start_date, neutral_site,
            home_team, away_team, home_conference, away_conference,
            home_rank, away_rank, home_score, away_score, status,
-           game_period, game_clock, game_possession,
+           game_period, game_clock, game_possession, game_situation,
            home_win_probability, away_win_probability, scores_updated_at
       from public.games
      where status = 'in_progress'
@@ -526,7 +531,8 @@ def load_user_bets(user_id: str) -> list[dict]:
            b.status, b.payout_amount, b.created_at, b.settled_at,
            g.home_team, g.away_team, g.season, g.week, g.start_date,
            g.home_score, g.away_score, g.status as game_status,
-           g.game_period, g.game_clock, g.game_possession, g.scores_updated_at,
+           g.game_period, g.game_clock, g.game_possession, g.game_situation,
+           g.scores_updated_at,
            (select min(first_game.start_date)
               from public.games first_game
              where first_game.season = g.season) as season_first_start
@@ -564,13 +570,13 @@ def load_completed_games() -> list[dict]:
 
 @st.cache_data(ttl=30, show_spinner=False)
 def load_weekly_standings() -> list[dict]:
-    """End-of-week league value, derived from settled tickets in the latest season."""
+    """Weekly league value, including the active week after its first settled ticket."""
     sql = """
     with current_season as (
         select coalesce(max(season), extract(year from now())::integer) as season
           from public.games
     ),
-    completed_weeks as (
+    standings_weeks as (
         select season, 0 as week from current_season
         union
         select g.season, g.week
@@ -580,6 +586,12 @@ def load_weekly_standings() -> list[dict]:
         having max(g.start_date) + interval '6 hours' < now()
            and count(*) filter (where g.status = 'completed') > 0
            and count(*) filter (where g.status = 'in_progress') = 0
+        union
+        select distinct g.season, g.week
+          from public.games g
+          join public.bets b on b.game_id = g.id
+          join current_season cs on cs.season = g.season
+         where b.status in ('won', 'lost', 'push')
     )
     select u.id as user_id, u.username, w.season, w.week,
            cast(
@@ -595,7 +607,7 @@ def load_weekly_standings() -> list[dict]:
                as numeric(14,2)
            ) as net_worth
       from public.users u
-      cross join completed_weeks w
+      cross join standings_weeks w
      order by w.week, net_worth desc, u.username
     """
     with ro() as conn:
@@ -608,9 +620,10 @@ def load_all_bets() -> list[dict]:
     sql = """
     select b.user_id, b.id, b.bet_type, b.line_placed, b.wager_amount,
            b.payout_multiplier, b.status, b.payout_amount, b.created_at,
-           g.id as game_id, g.home_team, g.away_team, g.week, g.start_date,
+           g.id as game_id, g.season, g.home_team, g.away_team, g.week, g.start_date,
            g.home_score, g.away_score, g.status as game_status,
-           g.game_period, g.game_clock, g.game_possession, g.scores_updated_at
+           g.game_period, g.game_clock, g.game_possession, g.game_situation,
+           g.scores_updated_at
       from public.bets b
       join public.games g on g.id = b.game_id
      order by b.created_at desc
@@ -694,6 +707,7 @@ def ensure_runtime_schema() -> None:
         exec_(conn, "alter table public.games add column if not exists game_period integer")
         exec_(conn, "alter table public.games add column if not exists game_clock text")
         exec_(conn, "alter table public.games add column if not exists game_possession text")
+        exec_(conn, "alter table public.games add column if not exists game_situation text")
         exec_(conn, "alter table public.games add column if not exists home_win_probability numeric(5,4)")
         exec_(conn, "alter table public.games add column if not exists away_win_probability numeric(5,4)")
         exec_(
@@ -1340,6 +1354,10 @@ def _render_live_scoreboard(games: list[dict]) -> None:
     for game in games:
         separator = "VS" if game.get("neutral_site") else "AT"
         progress = game_progress(game.get("game_period"), game.get("game_clock"))
+        situation = str(game.get("game_situation") or "").strip()
+        situation_html = (
+            f'<div class="fd-live-situation">{escape(situation)}</div>' if situation else ""
+        )
         possession = str(game.get("game_possession") or "").lower()
         away_ball = '<span class="fd-possession" title="Possession" aria-label="Possession">🏈</span>' if possession == "away" else ""
         home_ball = '<span class="fd-possession" title="Possession" aria-label="Possession">🏈</span>' if possession == "home" else ""
@@ -1365,6 +1383,7 @@ def _render_live_scoreboard(games: list[dict]) -> None:
                     <strong>{_score_value(game.get('home_score'))}</strong>
                 </div>
                 {probability_html}
+                {situation_html}
                 <div class="fd-live-meta"><strong>{escape(progress)}</strong> · {separator} · Week {game['week']} · Scores refresh automatically</div>
             </div>
             """,
@@ -1666,6 +1685,7 @@ def render_ticket_cards(
             game_status = str(bet.get("game_status") or "scheduled")
             if game_status == "in_progress":
                 progress = game_progress(bet.get("game_period"), bet.get("game_clock"))
+                situation = str(bet.get("game_situation") or "").strip()
                 possession = str(bet.get("game_possession") or "").lower()
                 away_ball = '<span class="fd-possession" title="Possession" aria-label="Possession">🏈</span>' if possession == "away" else ""
                 home_ball = '<span class="fd-possession" title="Possession" aria-label="Possession">🏈</span>' if possession == "home" else ""
@@ -1678,7 +1698,7 @@ def render_ticket_cards(
                     if bet.get("home_score") is not None and bet.get("away_score") is not None
                     else "Score pending"
                 )
-                detail = f"{progress} · {score}"
+                detail = f"{progress} · {situation} · {score}" if situation else f"{progress} · {score}"
                 card_class = "ticket-live"
                 result = f"<span class='ticket-result live'><i></i>{escape(progress)}</span>"
             elif game_status == "completed":
@@ -1882,11 +1902,14 @@ def tab_results() -> None:
 # =====================================================================
 def build_weekly_recap(ticket_rows: list[dict], weekly_rows: list[dict]) -> dict | None:
     """Create deterministic recap awards from public league data."""
-    completed_weeks = sorted({int(row["week"]) for row in weekly_rows if int(row["week"]) > 0})
-    if not completed_weeks:
+    completed_periods = [
+        (int(row["season"]), int(row["week"]))
+        for row in ticket_rows
+        if row.get("season") is not None and int(row.get("week") or 0) > 0
+    ]
+    if not completed_periods:
         return None
-    week = completed_weeks[-1]
-    season = max(int(row["season"]) for row in weekly_rows if int(row["week"]) == week)
+    season, week = max(completed_periods)
     current = [
         row for row in weekly_rows
         if int(row["season"]) == season and int(row["week"]) == week
@@ -1953,6 +1976,74 @@ def build_weekly_recap(ticket_rows: list[dict], weekly_rows: list[dict]) -> dict
         "popular_count": pick_counts.get(popular_key, 0) if popular_key else 0,
         "most_active": most_active,
         "most_active_count": activity.get(most_active, 0) if most_active else 0,
+    }
+
+
+def build_standings_snapshot(
+    board: list[dict], ticket_rows: list[dict], user_id: str
+) -> dict:
+    """Combine season standings with the latest week's settled money movement."""
+    ticket_weeks = [
+        (int(row["season"]), int(row["week"]))
+        for row in ticket_rows
+        if row.get("season") is not None and row.get("week") is not None
+    ]
+    active_period = max(ticket_weeks, default=None)
+    week_rows = [
+        row
+        for row in ticket_rows
+        if active_period is not None
+        and row.get("season") is not None
+        and row.get("week") is not None
+        and (int(row["season"]), int(row["week"])) == active_period
+        and row.get("status") in {"won", "lost", "push"}
+    ]
+
+    weekly_pl: defaultdict[str, Decimal] = defaultdict(lambda: Decimal("0.00"))
+    weekly_record: defaultdict[str, Counter] = defaultdict(Counter)
+    for ticket in week_rows:
+        uid = str(ticket["user_id"])
+        weekly_pl[uid] += money(ticket.get("payout_amount")) - money(ticket.get("wager_amount"))
+        weekly_record[uid][str(ticket["status"])] += 1
+
+    rows: list[dict] = []
+    for rank, standing in enumerate(board, start=1):
+        row = dict(standing)
+        uid = str(row["user_id"])
+        row["rank"] = rank
+        row["week_change"] = money(weekly_pl[uid])
+        row["week_wins"] = weekly_record[uid]["won"]
+        row["week_losses"] = weekly_record[uid]["lost"]
+        row["week_pushes"] = weekly_record[uid]["push"]
+        rows.append(row)
+
+    active = [
+        row
+        for row in rows
+        if weekly_record[str(row["user_id"])] or row["week_change"]
+    ]
+    weekly_winner = min(
+        active,
+        key=lambda row: (-row["week_change"], str(row["username"]).casefold()),
+        default=None,
+    )
+    weekly_loser = min(
+        active,
+        key=lambda row: (row["week_change"], str(row["username"]).casefold()),
+        default=None,
+    )
+    if weekly_loser and weekly_loser["week_change"] >= 0:
+        weekly_loser = None
+
+    return {
+        "season": active_period[0] if active_period else None,
+        "week": active_period[1] if active_period else None,
+        "rows": rows,
+        "leader": rows[0] if rows else None,
+        "weekly_winner": weekly_winner,
+        "weekly_loser": weekly_loser,
+        "you": next((row for row in rows if str(row["user_id"]) == str(user_id)), None),
+        "settled_count": len(week_rows),
     }
 
 
@@ -2083,51 +2174,29 @@ def render_share_controls(card: bytes, recap: dict) -> None:
 
 def render_weekly_recap(ticket_rows: list[dict], weekly_rows: list[dict]) -> None:
     recap = build_weekly_recap(ticket_rows, weekly_rows)
-    st.markdown(
-        "<div class='section-head'><h3>Weekly recap</h3><span>The week in receipts</span></div>",
-        unsafe_allow_html=True,
-    )
     if recap is None:
-        st.markdown(
-            "<div class='fd-recap-empty'><strong>Week 1 is waiting.</strong><span>The recap publishes automatically after the final game: weekly winner, biggest hit, bad beat and the room’s favorite pick.</span></div>",
-            unsafe_allow_html=True,
-        )
         return
 
     winner = recap["winner"]
     change = money(winner["week_change"])
-    st.markdown(
-        f"""
-        <div class="fd-week-winner">
-            <small>Week {recap['week']:02d} winner</small>
-            <strong>{escape(str(winner['username']))}</strong>
-            <span>{fmt_money(change)} this week · {recap['ticket_count']} league tickets settled</span>
-        </div>
-        """,
-        unsafe_allow_html=True,
-    )
-    awards = _recap_awards(recap)
-    st.markdown(
-        "<div class='fd-recap-grid'>" + "".join(
-            f"<div class='fd-recap-item'><small>{escape(label)}</small><strong>{escape(name)}</strong><span>{escape(detail)}</span></div>"
-            for label, name, detail in awards
-        ) + "</div>",
-        unsafe_allow_html=True,
-    )
-    with st.expander("Share the week", expanded=False):
+    with st.expander(
+        f"Week {recap['week']} final · {winner['username']} won {fmt_money(change)}",
+        expanded=False,
+    ):
+        awards = _recap_awards(recap)
+        st.markdown(
+            "<div class='fd-recap-grid'>" + "".join(
+                f"<div class='fd-recap-item'><small>{escape(label)}</small><strong>{escape(name)}</strong><span>{escape(detail)}</span></div>"
+                for label, name, detail in awards
+            ) + "</div>",
+            unsafe_allow_html=True,
+        )
         card = build_share_card(recap)
-        st.image(card, width="stretch")
         render_share_controls(card, recap)
 
 
 def render_weekly_dashboard(rows: list[dict], user: dict) -> None:
-    st.markdown(
-        "<div class='section-head'><h3>Season tape</h3>"
-        "<span>Week-by-week rank · settled tickets only</span></div>",
-        unsafe_allow_html=True,
-    )
     if not rows:
-        st.caption("The league table appears as soon as the first player joins.")
         return
 
     history = pd.DataFrame(
@@ -2140,7 +2209,9 @@ def render_weekly_dashboard(rows: list[dict], user: dict) -> None:
         }
     )
     latest_season = int(history["season"].max())
-    history = history[history["season"] == latest_season].copy()
+    history = history[(history["season"] == latest_season) & (history["week"] > 0)].copy()
+    if history["week"].nunique() < 1:
+        return
     history["rank"] = (
         history.groupby("week")["net_worth"]
         .rank(method="min", ascending=False)
@@ -2207,47 +2278,8 @@ def render_weekly_dashboard(rows: list[dict], user: dict) -> None:
             symbolStrokeWidth=4,
         )
     )
-    st.altair_chart(chart, width="stretch")
-
-    weeks = sorted(history["week"].unique())
-    latest_week = int(weeks[-1])
-    previous_week = int(weeks[-2]) if len(weeks) > 1 else None
-    current = history[history["week"] == latest_week].sort_values(["rank", "player"])
-    previous_ranks = (
-        history[history["week"] == previous_week].set_index("user_id")["rank"].to_dict()
-        if previous_week is not None
-        else {}
-    )
-
-    st.markdown(
-        f"<div class='fd-movement-head'><span>{'Week 0 starting line' if latest_week == 0 else f'Week {latest_week} movement'}</span>"
-        f"<span>{latest_season} season</span></div>",
-        unsafe_allow_html=True,
-    )
-    for row in current.itertuples(index=False):
-        previous_rank = previous_ranks.get(row.user_id)
-        movement = int(previous_rank) - int(row.rank) if previous_rank is not None else None
-        if movement is None:
-            move_label, move_class = "NEW", "flat"
-        elif movement > 0:
-            move_label, move_class = f"▲ {movement}", "up"
-        elif movement < 0:
-            move_label, move_class = f"▼ {abs(movement)}", "down"
-        else:
-            move_label, move_class = "—", "flat"
-        you_class = " is-you" if row.user_id == str(user["id"]) else ""
-        you_label = " · You" if you_class else ""
-        st.markdown(
-            f"""
-            <div class="fd-movement-row{you_class}">
-                <div class="fd-movement-rank">{int(row.rank):02d}</div>
-                <div class="fd-movement-player">{escape(row.player)}{you_label}</div>
-                <div class="fd-movement-worth">{fmt_money(row.net_worth)}</div>
-                <div class="fd-movement-change {move_class}">{move_label}</div>
-            </div>
-            """,
-            unsafe_allow_html=True,
-        )
+    with st.expander("Season history · week-by-week rank", expanded=False):
+        st.altair_chart(chart, width="stretch")
 
 
 @st.fragment(run_every=60)
@@ -2257,95 +2289,115 @@ def tab_leaderboard(user: dict) -> None:
         st.info("No players yet.")
         return
 
-    leader = board[0]
+    all_bets = load_all_bets()
+    snapshot = build_standings_snapshot(board, all_bets, str(user["id"]))
+    leader = snapshot["leader"]
+    week_label = f"Week {snapshot['week']}" if snapshot["week"] is not None else "This week"
     st.markdown(
         f"""
         <div class="fd-view-head">
-            <h2>League table</h2>
-            <p>Leader · {escape(str(leader['username']))} · {fmt_money(leader['net_worth'])}</p>
+            <h2>Standings</h2>
+            <p>{escape(week_label)} so far · {snapshot['settled_count']} tickets settled</p>
         </div>
         """,
         unsafe_allow_html=True,
     )
 
-    your_index = next(
-        (index for index, row in enumerate(board, start=1) if str(row["user_id"]) == user["id"]),
-        None,
-    )
-    your_row = next((row for row in board if str(row["user_id"]) == user["id"]), None)
-    if your_row and your_index == 1:
-        chase_copy = f"You’re setting the pace · {fmt_money(your_row['net_worth'])} net worth"
-    elif your_row:
-        gap = money(leader["net_worth"]) - money(your_row["net_worth"])
-        chase_copy = f"You’re #{your_index} · {fmt_money(gap)} behind {leader['username']}"
-    else:
-        chase_copy = "Your first ticket puts you in the race"
+    weekly_winner = snapshot["weekly_winner"]
+    weekly_loser = snapshot["weekly_loser"]
+    your_row = snapshot["you"]
+    pulse = [
+        ("Season leader", str(leader["username"]), fmt_money(leader["net_worth"])),
+        (
+            f"{week_label} leader",
+            str(weekly_winner["username"]) if weekly_winner else "No action",
+            fmt_money_change(weekly_winner["week_change"]) if weekly_winner else "$0.00",
+        ),
+        (
+            "Biggest loss",
+            str(weekly_loser["username"]) if weekly_loser else "None yet",
+            fmt_money_change(weekly_loser["week_change"]) if weekly_loser else "$0.00",
+        ),
+        (
+            "Your position",
+            f"#{your_row['rank']} of {len(board)}" if your_row else "Unranked",
+            f"{fmt_money_change(your_row['week_change'])} this week" if your_row else "No tickets",
+        ),
+    ]
     st.markdown(
-        f"<div class='fd-rival-callout'><span>Rival watch</span><strong>{escape(chase_copy)}</strong></div>",
+        "<div class='fd-standings-pulse'>"
+        + "".join(
+            f"<div><small>{escape(label)}</small><strong>{escape(name)}</strong><span>{escape(value)}</span></div>"
+            for label, name, value in pulse
+        )
+        + "</div>",
         unsafe_allow_html=True,
     )
 
-    weekly_rows = load_weekly_standings()
-    render_weekly_dashboard(weekly_rows, user)
-    render_weekly_recap(load_weekly_recap_bets(), weekly_rows)
-
     st.markdown(
-        "<div class='section-head'><h3>Current table</h3>"
-        "<span>Cash + open stake</span></div>",
+        f"<div class='fd-table-head'><span>Rank / player</span><span>{escape(week_label)}</span><span>Total</span></div>",
         unsafe_allow_html=True,
     )
-
-    for index, row in enumerate(board, start=1):
-        is_you = str(row["user_id"]) == user["id"]
+    for row in snapshot["rows"]:
+        is_you = str(row["user_id"]) == str(user["id"])
         you_label = " · You" if is_you else ""
+        week_change = money(row["week_change"])
+        change_class = "up" if week_change > 0 else ("down" if week_change < 0 else "flat")
         st.markdown(
             f"""
             <div class="leader-row {'is-you' if is_you else ''}">
-                <div class="leader-rank">{index:02d}</div>
+                <div class="leader-rank">{row['rank']:02d}</div>
                 <div>
                     <div class="leader-name">{escape(str(row['username']))}{you_label}</div>
-                    <div class="leader-record">{row['wins']}-{row['losses']}-{row['pushes']} · {fmt_money(row['open_stake'])} at risk</div>
+                    <div class="leader-record">Season {row['wins']}-{row['losses']}-{row['pushes']} · {fmt_money(row['open_stake'])} at risk</div>
                 </div>
+                <div class="leader-week {change_class}"><strong>{fmt_money_change(week_change)}</strong><small>{row['week_wins']}-{row['week_losses']}-{row['week_pushes']}</small></div>
                 <div class="leader-worth">{fmt_money(row['net_worth'])}<small>Net worth</small></div>
             </div>
             """,
             unsafe_allow_html=True,
         )
 
+    weekly_rows = load_weekly_standings()
+    render_weekly_dashboard(weekly_rows, user)
+    render_weekly_recap(load_weekly_recap_bets(), weekly_rows)
+
     st.markdown(
         "<div class='section-head'><h3>Scout the league</h3><span>Every ticket is public</span></div>",
         unsafe_allow_html=True,
     )
-    st.caption("Open a player to see exactly where their money is riding.")
+    st.caption("Choose one player to see exactly where their money is riding.")
 
-    all_bets = load_all_bets()
     by_user: dict[str, list[dict]] = {}
     for b in all_bets:
         by_user.setdefault(str(b["user_id"]), []).append(b)
 
-    for r in board:
-        uid = str(r["user_id"])
-        label = (
-            f"{r['username']} · {fmt_money(r['net_worth'])} · "
-            f"{r['wins']}-{r['losses']}-{r['pushes']}"
-        )
-        with st.expander(label, expanded=False):
-            rows = by_user.get(uid, [])
-            if not rows:
-                st.caption("No bets placed yet.")
-                continue
-            open_rows = [b for b in rows if b["status"] == "pending"]
-            settled_rows = [b for b in rows if b["status"] != "pending"]
-            st.markdown("**Open tickets**")
-            if not open_rows:
-                st.caption("No open tickets.")
-            else:
-                render_ticket_cards(open_rows, settled=False)
-            st.markdown("**Settled tickets**")
-            if not settled_rows:
-                st.caption("Nothing settled.")
-            else:
-                render_ticket_cards(settled_rows, settled=True)
+    player_ids = [str(row["user_id"]) for row in board]
+    player_by_id = {str(row["user_id"]): row for row in board}
+    selected_id = st.selectbox(
+        "Player",
+        player_ids,
+        format_func=lambda uid: (
+            f"{player_by_id[uid]['username']} · {fmt_money(player_by_id[uid]['net_worth'])}"
+        ),
+        key="scout_player",
+    )
+    rows = by_user.get(selected_id, [])
+    if not rows:
+        st.caption("No bets placed yet.")
+        return
+    open_rows = [b for b in rows if b["status"] == "pending"]
+    settled_rows = [b for b in rows if b["status"] != "pending"]
+    st.markdown("**Open tickets**")
+    if not open_rows:
+        st.caption("No open tickets.")
+    else:
+        render_ticket_cards(open_rows, settled=False)
+    st.markdown("**Settled tickets**")
+    if not settled_rows:
+        st.caption("Nothing settled.")
+    else:
+        render_ticket_cards(settled_rows, settled=True)
 
 
 # =====================================================================

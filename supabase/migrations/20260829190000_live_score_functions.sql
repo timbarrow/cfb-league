@@ -1,3 +1,5 @@
+alter table public.games add column if not exists game_situation text;
+
 create extension if not exists pg_cron;
 create extension if not exists pg_net with schema extensions;
 
@@ -24,6 +26,7 @@ begin
                game_period = coalesce((score_row->>'game_period')::integer, g.game_period),
                game_clock = coalesce(nullif(score_row->>'game_clock', ''), g.game_clock),
                game_possession = coalesce(nullif(score_row->>'game_possession', ''), g.game_possession),
+               game_situation = nullif(score_row->>'game_situation', ''),
                home_win_probability = coalesce((score_row->>'home_win_probability')::numeric, g.home_win_probability),
                away_win_probability = coalesce((score_row->>'away_win_probability')::numeric, g.away_win_probability),
                status = case

@@ -142,12 +142,15 @@ password or raw token. Signing out revokes the session immediately.
 Open tickets refresh automatically while the app is open. When CFBD posts a
 score they change to **LIVE**, then **FINAL · GRADING**, and finally the settled
 win/loss/push receipt. The board and header also show when odds and
-scores were last refreshed.
+scores were last refreshed. Live cards include possession and CFBD's current
+down-and-distance situation when the scoreboard feed provides it.
 
 ### Weekly league experience
 
-- The standings dashboard starts at **Week 0** with every player at $10,000.
-- A season-tape chart tracks every player's weekly rank and net worth.
+- Standings lead with the current week's winner, biggest loss, each player's
+  weekly profit/loss, season net worth and the signed-in player's rank.
+- The Week 0 starting line is omitted. As soon as Week 1 has settled action, a
+  collapsed season-history chart tracks every player's weekly rank and net worth.
 - Each closed week publishes a recap with the weekly winner, biggest hit, bad
   beat, most popular pick and biggest wager.
 - The recap generates a portrait PNG that can be shared from a phone or

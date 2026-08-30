@@ -91,6 +91,9 @@ function shapeGame(
     game_possession: game.possession == null
       ? null
       : String(game.possession).trim().toLowerCase(),
+    game_situation: game.situation == null
+      ? null
+      : String(game.situation).trim(),
     home_win_probability: numberOrNull(
       home.winProbability ?? home.win_probability,
     ),

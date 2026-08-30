@@ -42,6 +42,54 @@ def test_weekly_recap_includes_every_player_and_awards() -> None:
     assert recap["bad_beat"]["username"] == "Blair"
 
 
+def test_standings_snapshot_surfaces_current_week_money_and_user_rank() -> None:
+    board = [
+        {"user_id": "a", "username": "Alex", "net_worth": 10200, "open_stake": 0,
+         "wins": 1, "losses": 0, "pushes": 0},
+        {"user_id": "b", "username": "Blair", "net_worth": 9750, "open_stake": 100,
+         "wins": 0, "losses": 1, "pushes": 0},
+    ]
+    tickets = [
+        {"user_id": "a", "season": 2026, "week": 1, "status": "won",
+         "wager_amount": 200, "payout_amount": 400},
+        {"user_id": "b", "season": 2026, "week": 1, "status": "lost",
+         "wager_amount": 250, "payout_amount": 0},
+        {"user_id": "b", "season": 2026, "week": 2, "status": "pending",
+         "wager_amount": 100, "payout_amount": None},
+    ]
+
+    snapshot = app.build_standings_snapshot(board, tickets, "b")
+
+    assert snapshot["week"] == 2
+    assert snapshot["settled_count"] == 0
+    assert snapshot["weekly_winner"] is None
+    assert snapshot["weekly_loser"] is None
+    assert snapshot["you"]["rank"] == 2
+    assert snapshot["you"]["week_change"] == Decimal("0.00")
+
+
+def test_standings_snapshot_calls_out_weekly_winner_and_loser() -> None:
+    board = [
+        {"user_id": "a", "username": "Alex", "net_worth": 10200},
+        {"user_id": "b", "username": "Blair", "net_worth": 9750},
+    ]
+    tickets = [
+        {"user_id": "a", "season": 2026, "week": 1, "status": "won",
+         "wager_amount": 200, "payout_amount": 400},
+        {"user_id": "b", "season": 2026, "week": 1, "status": "lost",
+         "wager_amount": 250, "payout_amount": 0},
+    ]
+
+    snapshot = app.build_standings_snapshot(board, tickets, "a")
+
+    assert snapshot["weekly_winner"]["username"] == "Alex"
+    assert snapshot["weekly_winner"]["week_change"] == Decimal("200.00")
+    assert snapshot["weekly_loser"]["username"] == "Blair"
+    assert snapshot["weekly_loser"]["week_change"] == Decimal("-250.00")
+    assert snapshot["rows"][0]["week_wins"] == 1
+    assert snapshot["rows"][1]["week_losses"] == 1
+
+
 def test_share_card_is_a_portrait_png() -> None:
     recap = {
         "season": 2026,
