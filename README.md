@@ -149,8 +149,8 @@ down-and-distance situation when the scoreboard feed provides it.
 
 - Standings lead with the current week's winner, biggest loss, each player's
   weekly profit/loss, season net worth and the signed-in player's rank.
-- The Week 0 starting line is omitted. As soon as Week 1 has settled action, a
-  collapsed season-history chart tracks every player's weekly rank and net worth.
+- The Week 0 starting line is omitted. Week 1 uses a zero-centered profit/loss
+  chart; after Week 2 it becomes a week-by-week rank and net-worth history.
 - Each closed week publishes a recap with the weekly winner, biggest hit, bad
   beat, most popular pick and biggest wager.
 - The recap generates a portrait PNG that can be shared from a phone or

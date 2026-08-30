@@ -2220,6 +2220,71 @@ def render_weekly_dashboard(rows: list[dict], user: dict) -> None:
     history["week_label"] = "W" + history["week"].astype(str)
     history["value_label"] = history["net_worth"].map(lambda value: f"${value:,.2f}")
 
+    week_count = int(history["week"].nunique())
+    if week_count == 1:
+        latest_week = int(history["week"].iloc[0])
+        history["season_pl"] = history["net_worth"] - float(STARTING_BANKROLL)
+        history["pl_label"] = history["season_pl"].map(fmt_money_change)
+        history["result"] = history["season_pl"].map(
+            lambda value: "Gain" if value > 0 else ("Loss" if value < 0 else "Even")
+        )
+        y = alt.Y(
+            "player:N",
+            title=None,
+            sort=alt.SortField(field="rank", order="ascending"),
+            axis=alt.Axis(labelLimit=115),
+        )
+        x = alt.X(
+            "season_pl:Q",
+            title=f"WEEK {latest_week} PROFIT / LOSS",
+            scale=alt.Scale(zero=True),
+            axis=alt.Axis(format="$,.0f"),
+        )
+        color = alt.Color(
+            "result:N",
+            title=None,
+            scale=alt.Scale(
+                domain=["Gain", "Even", "Loss"],
+                range=["#d6a800", "#667a6c", "#c8433b"],
+            ),
+            legend=None,
+        )
+        tooltip = [
+            alt.Tooltip("player:N", title="Player"),
+            alt.Tooltip("rank:Q", title="Place"),
+            alt.Tooltip("pl_label:N", title=f"Week {latest_week} P/L"),
+            alt.Tooltip("value_label:N", title="Net worth"),
+        ]
+        bars = alt.Chart(history).mark_bar(size=14).encode(
+            x=x, y=y, color=color, tooltip=tooltip
+        )
+        points = alt.Chart(history).mark_point(filled=True, size=65).encode(
+            x=x, y=y, color=color, tooltip=tooltip
+        )
+        labels = alt.Chart(history).mark_text(
+            align="left", baseline="middle", dx=7, color="#07110e", fontSize=11
+        ).encode(x=x, y=y, text="pl_label:N")
+        chart = (
+            (bars + points + labels)
+            .properties(height=max(220, len(history) * 28))
+            .configure(background="transparent")
+            .configure_view(stroke=None)
+            .configure_axis(
+                domainColor="#52675a",
+                gridColor="#a9b99f",
+                labelColor="#07110e",
+                titleColor="#07110e",
+                titleFont="IBM Plex Mono",
+                labelFont="IBM Plex Mono",
+            )
+        )
+        with st.expander(
+            f"Week {latest_week} money chart · profit / loss",
+            expanded=False,
+        ):
+            st.altair_chart(chart, width="stretch")
+        return
+
     max_rank = max(int(history["rank"].max()), 2)
     palette = [
         "#f2c84b",
@@ -2245,8 +2310,8 @@ def render_weekly_dashboard(rows: list[dict], user: dict) -> None:
             y=alt.Y(
                 "rank:Q",
                 title="PLACE",
-                scale=alt.Scale(domain=[1, max_rank], reverse=True),
-                axis=alt.Axis(tickMinStep=1),
+                scale=alt.Scale(domain=[max_rank, 1]),
+                axis=alt.Axis(tickMinStep=1, tickCount=max_rank),
             ),
             color=alt.Color(
                 "player:N",
@@ -2266,14 +2331,14 @@ def render_weekly_dashboard(rows: list[dict], user: dict) -> None:
         .configure(background="transparent")
         .configure_view(stroke="#87978c")
         .configure_axis(
-            gridColor="#42574b",
-            labelColor="#f7f3e8",
-            titleColor="#ddebcb",
+            gridColor="#a9b99f",
+            labelColor="#07110e",
+            titleColor="#07110e",
             titleFont="IBM Plex Mono",
             labelFont="IBM Plex Mono",
         )
         .configure_legend(
-            labelColor="#f7f3e8",
+            labelColor="#07110e",
             labelFont="IBM Plex Mono",
             symbolStrokeWidth=4,
         )
