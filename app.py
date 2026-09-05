@@ -1836,6 +1836,23 @@ def tab_my_tickets(user: dict, balance: Decimal) -> None:
 # =====================================================================
 # Tab 3 — Final scores
 # =====================================================================
+def _current_results_week(completed_games: list[dict]) -> int | None:
+    """
+    The week Results should default to: the active board week once any of
+    its games have kicked off (live or final), otherwise the most recently
+    completed week.
+    """
+    upcoming = load_upcoming_games()
+    board_week = int(upcoming[0]["week"]) if upcoming else None
+    if board_week is not None:
+        live_weeks = {int(g["week"]) for g in load_live_games()}
+        completed_weeks = {int(g["week"]) for g in completed_games}
+        if board_week in live_weeks or board_week in completed_weeks:
+            return board_week
+    completed_weeks = {int(g["week"]) for g in completed_games}
+    return max(completed_weeks) if completed_weeks else None
+
+
 @st.fragment(run_every=30)
 def tab_results() -> None:
     games = load_completed_games()
@@ -1848,11 +1865,20 @@ def tab_results() -> None:
         return
 
     weeks = sorted({int(game["week"]) for game in games}, reverse=True)
+    default_week = _current_results_week(games)
+    if default_week is not None and default_week not in weeks:
+        weeks = sorted({*weeks, default_week}, reverse=True)
+
+    options = ["All weeks", *[f"Week {week}" for week in weeks]]
+    default_choice = f"Week {default_week}" if default_week is not None else "All weeks"
+    default_index = options.index(default_choice) if default_choice in options else 0
+
     filter_col, search_col = st.columns([1, 2])
     with filter_col:
         week_pick = st.selectbox(
             "Week",
-            ["All weeks", *[f"Week {week}" for week in weeks]],
+            options,
+            index=default_index,
             key="results_week",
         )
     with search_col:
@@ -1883,6 +1909,8 @@ def tab_results() -> None:
         return
 
     for game in visible:
+        if game["away_score"] is None or game["home_score"] is None:
+            continue
         away_score = int(game["away_score"])
         home_score = int(game["home_score"])
         away_class = " winner" if away_score > home_score else ""
