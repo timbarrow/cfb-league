@@ -1,4 +1,6 @@
-@import url('https://fonts.googleapis.com/css2?family=Archivo+Black&family=IBM+Plex+Mono:wght@400;500;600&family=Roboto+Condensed:wght@400;500;600;700&display=swap');
+/* Archivo Black, IBM Plex Mono, and Roboto Condensed are loaded via the
+   <link rel="stylesheet"> tag injected in app.py, alongside the base
+   theme's fonts, so a second @import here doesn't double-fetch them. */
 
 :root {
     --fd-blue: #123b7a;
