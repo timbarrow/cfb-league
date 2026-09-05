@@ -1383,9 +1383,7 @@ def _render_live_scoreboard(games: list[dict]) -> None:
                 <div class="fd-live-team">
                     <span>{rank_html(game.get('home_rank'))}{escape(str(game['home_team']))}{home_ball}</span>
                     <strong>{_score_value(game.get('home_score'))}</strong>
-                </div>
-                {probability_html}
-                {situation_html}
+                </div>{probability_html}{situation_html}
                 <div class="fd-live-meta"><strong>{escape(progress)}</strong> · {separator} · Week {game['week']} · Scores refresh automatically</div>
             </div>
             """,
