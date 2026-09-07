@@ -1,46 +1,10 @@
 import { createClient } from "jsr:@supabase/supabase-js@2";
+import { shouldPoll } from "./polling.ts";
 
 const jsonHeaders = { "content-type": "application/json" };
 
 function response(body: Record<string, unknown>, status = 200): Response {
   return new Response(JSON.stringify(body), { status, headers: jsonHeaders });
-}
-
-function chicagoParts(now = new Date()): Record<string, number> {
-  const formatter = new Intl.DateTimeFormat("en-US", {
-    timeZone: "America/Chicago",
-    year: "numeric",
-    month: "numeric",
-    weekday: "short",
-    hour: "numeric",
-    minute: "numeric",
-    hourCycle: "h23",
-  });
-  const parts = Object.fromEntries(
-    formatter.formatToParts(now).map(({ type, value }) => [type, value]),
-  );
-  const weekday = ["Sun", "Mon", "Tue", "Wed", "Thu", "Fri", "Sat"].indexOf(
-    parts.weekday,
-  );
-  return {
-    year: Number(parts.year),
-    month: Number(parts.month),
-    weekday,
-    hour: Number(parts.hour),
-    minute: Number(parts.minute),
-  };
-}
-
-export function shouldPoll(now = new Date()): boolean {
-  const { month, weekday, hour, minute } = chicagoParts(now);
-  if (![1, 8, 9, 10, 11, 12].includes(month)) return false;
-  if (weekday >= 1 && weekday <= 3) {
-    return (hour === 20 || hour === 22) && minute < 4 ||
-      hour === 23 && minute >= 56;
-  }
-  if (weekday === 4 || weekday === 5) return hour >= 20;
-  if (weekday === 6) return hour >= 11;
-  return hour < 2 || hour === 6 && minute < 4;
 }
 
 function numberOrNull(value: unknown): number | null {
@@ -141,8 +105,20 @@ Deno.serve(async (request) => {
   } catch {
     // Cron sends an empty JSON body.
   }
-  if (!force && !shouldPoll()) {
-    return response({ skipped: true, reason: "outside game window" });
+  if (!force) {
+    let poll: boolean;
+    try {
+      poll = await shouldPoll(supabase);
+    } catch (error) {
+      console.error(error);
+      return response(
+        { error: "Unable to determine live polling window" },
+        500,
+      );
+    }
+    if (!poll) {
+      return response({ skipped: true, reason: "no game live or due soon" });
+    }
   }
 
   const apiKey = Deno.env.get("CFBD_API_KEY");

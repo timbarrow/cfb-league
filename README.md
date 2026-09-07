@@ -91,20 +91,20 @@ it starts even if the page was left open.
 - The board refreshes once daily at **8:07 AM Central**. Each market uses
   **DraftKings first**, then fills only a missing spread or total from
   **Bovada**. The game card labels the source whenever the books are mixed.
-- Mon–Wed results refresh at **8 PM, 10 PM and 11:59 PM Central**.
-- Thu–Fri live results refresh about every seven minutes from **8 PM through
-  midnight**.
-- Saturday live results refresh about every seven minutes from **11 AM through
-  Sunday at 2 AM**, followed by a **Sunday 6 AM** sweep.
-- Live runs use CFBD's Tier 1 `/scoreboard` endpoint in one API call, then grade
-  completed tickets immediately.
+- Supabase checks the stored FBS schedule every two minutes, without spending a
+  CFBD call. Polling starts 15 minutes before any kickoff on any day of the week
+  and stops once the games are final, with a 12-hour hard limit for stale,
+  postponed or canceled rows.
+- A live run uses CFBD's Tier 1 `/scoreboard` endpoint in one API call, then
+  grades completed tickets immediately.
 
 ### Reliable two-minute live polling
 
 Production live scores are designed to run through Supabase Cron and the
 `cfb-live-scores` Edge Function in `supabase/functions/`. Cron invokes the
-function every two minutes; the function calls CFBD only during Central-time
-game windows, updates every loaded FBS game in one database RPC, and settles
+function every two minutes; the function calls CFBD only when the `games` table
+shows an unfinished FBS game due within 15 minutes or started within the last
+12 hours. It updates every loaded FBS game in one database RPC and settles
 completed tickets transactionally. GitHub's `CFB live scores` workflow remains
 available as a manual fallback.
 
@@ -118,12 +118,8 @@ supabase functions deploy cfb-live-scores --no-verify-jwt
 ```
 
 The migration creates the two-minute Cron job and generates its authentication
-secret inside Supabase Vault. The function's Central-time guard prevents
-off-window CFBD calls.
-
-GitHub's scheduler can start a job a few minutes late. Also, `*/7` produces
-`:00, :07, … :56`, followed by the next hour's `:00`, so the hour boundary is a
-four-minute interval.
+secret inside Supabase Vault. A cheap off-season guard avoids even the schedule
+query outside January and August–December.
 
 ### Tickets, live results and sign-in
 
@@ -241,7 +237,7 @@ python settle_bets.py --dry-run     # grade everything, write nothing
 |---|---|---|
 | Streamlit Community Cloud | unlimited public apps | 1 app, ~10 users |
 | Supabase | 500 MB DB | a few MB per season |
-| CFBD API | Tier 1 (5,000 calls/month) | ~3,500–4,000 calls in a five-week month |
+| CFBD API | Tier 1 (5,000 calls/month) | schedule-driven; only active game windows call `/scoreboard` |
 | GitHub Actions (**public repo**) | unlimited minutes | **$0** |
 | GitHub Actions (private repo) | 2,000 min/mo on Free | see below |
 
@@ -250,9 +246,8 @@ allowance is consumed. Keep the repo public unless you have a reason not to;
 none of the secrets live in the code.
 
 On a **private** repo, minutes are billed and GitHub rounds every job up to the
-nearest minute. This live schedule produces roughly 5,000–6,000 short runs over
-an August–January season. The included public repository therefore matters:
-its GitHub Actions cost remains **$0**.
+nearest minute. The daily pipeline uses Actions; the two-minute live-score
+schedule runs in Supabase, while the GitHub live-score workflow is manual-only.
 
 ## Notes
 
