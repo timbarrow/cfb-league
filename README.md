@@ -145,8 +145,8 @@ down-and-distance situation when the scoreboard feed provides it.
 
 - Standings lead with the current week's winner, biggest loss, each player's
   weekly profit/loss, season net worth and the signed-in player's rank.
-- The Week 0 starting line is omitted. Week 1 uses a zero-centered profit/loss
-  chart; after Week 2 it becomes a week-by-week rank and net-worth history.
+- Season history is a line per player of net worth by week, starting from the
+  $10,000 bankroll. Only settled tickets move a line; pending games don't count.
 - Each closed week publishes a recap with the weekly winner, biggest hit, bad
   beat, most popular pick and biggest wager.
 - The recap generates a portrait PNG that can be shared from a phone or

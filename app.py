@@ -2237,125 +2237,69 @@ def render_weekly_dashboard(rows: list[dict], user: dict) -> None:
         }
     )
     latest_season = int(history["season"].max())
-    history = history[(history["season"] == latest_season) & (history["week"] > 0)].copy()
-    if history["week"].nunique() < 1:
+    history = history[history["season"] == latest_season].copy()
+    # Week 0 is the starting bankroll, so Week 1 already draws a line.
+    if history[history["week"] > 0].empty:
         return
     history["rank"] = (
         history.groupby("week")["net_worth"]
         .rank(method="min", ascending=False)
         .astype(int)
     )
-    history["week_label"] = "W" + history["week"].astype(str)
     history["value_label"] = history["net_worth"].map(lambda value: f"${value:,.2f}")
+    history = history.sort_values(["user_id", "week"])
+    history["week_change"] = history.groupby("user_id")["net_worth"].diff().fillna(0.0)
+    history["change_label"] = history["week_change"].map(fmt_money_change)
 
-    week_count = int(history["week"].nunique())
-    if week_count == 1:
-        latest_week = int(history["week"].iloc[0])
-        history["season_pl"] = history["net_worth"] - float(STARTING_BANKROLL)
-        history["pl_label"] = history["season_pl"].map(fmt_money_change)
-        history["result"] = history["season_pl"].map(
-            lambda value: "Gain" if value > 0 else ("Loss" if value < 0 else "Even")
-        )
-        y = alt.Y(
-            "player:N",
-            title=None,
-            sort=alt.SortField(field="rank", order="ascending"),
-            axis=alt.Axis(labelLimit=115),
-        )
-        x = alt.X(
-            "season_pl:Q",
-            title=f"WEEK {latest_week} PROFIT / LOSS",
-            scale=alt.Scale(zero=True),
-            axis=alt.Axis(format="$,.0f"),
-        )
-        color = alt.Color(
-            "result:N",
-            title=None,
-            scale=alt.Scale(
-                domain=["Gain", "Even", "Loss"],
-                range=["#d6a800", "#667a6c", "#c8433b"],
-            ),
-            legend=None,
-        )
-        tooltip = [
-            alt.Tooltip("player:N", title="Player"),
-            alt.Tooltip("rank:Q", title="Place"),
-            alt.Tooltip("pl_label:N", title=f"Week {latest_week} P/L"),
-            alt.Tooltip("value_label:N", title="Net worth"),
-        ]
-        bars = alt.Chart(history).mark_bar(size=14).encode(
-            x=x, y=y, color=color, tooltip=tooltip
-        )
-        points = alt.Chart(history).mark_point(filled=True, size=65).encode(
-            x=x, y=y, color=color, tooltip=tooltip
-        )
-        labels = alt.Chart(history).mark_text(
-            align="left", baseline="middle", dx=7, color="#07110e", fontSize=11
-        ).encode(x=x, y=y, text="pl_label:N")
-        chart = (
-            (bars + points + labels)
-            .properties(height=max(220, len(history) * 28))
-            .configure(background="transparent")
-            .configure_view(stroke=None)
-            .configure_axis(
-                domainColor="#52675a",
-                gridColor="#a9b99f",
-                labelColor="#07110e",
-                titleColor="#07110e",
-                titleFont="IBM Plex Mono",
-                labelFont="IBM Plex Mono",
-            )
-        )
-        with st.expander(
-            f"Week {latest_week} money chart · profit / loss",
-            expanded=False,
-        ):
-            st.altair_chart(chart, width="stretch")
-        return
-
-    max_rank = max(int(history["rank"].max()), 2)
     palette = [
-        "#f2c84b",
-        "#8ecae6",
-        "#ef8279",
-        "#ddebcb",
-        "#c5a3ff",
-        "#ff9f5a",
-        "#63d1a8",
-        "#f7f3e8",
-        "#de9dcc",
-        "#9fb2ff",
+        "#1f77b4",
+        "#d62728",
+        "#2ca02c",
+        "#9467bd",
+        "#ff7f0e",
+        "#8c564b",
+        "#e377c2",
+        "#17becf",
+        "#7f7f7f",
+        "#bcbd22",
+        "#393b79",
+        "#ad494a",
+        "#637939",
+        "#7b4173",
+        "#843c39",
+        "#3182bd",
     ]
     chart = (
         alt.Chart(history)
-        .mark_line(point=alt.OverlayMarkDef(filled=True, size=78), strokeWidth=3)
+        .mark_line(point=alt.OverlayMarkDef(filled=True, size=60), strokeWidth=2.5)
         .encode(
             x=alt.X(
                 "week:O",
                 title="WEEK",
-                axis=alt.Axis(labelAngle=0, tickSize=0),
+                axis=alt.Axis(labelAngle=0, tickSize=0, labelExpr="datum.value == 0 ? 'Start' : datum.value"),
             ),
             y=alt.Y(
-                "rank:Q",
-                title="PLACE",
-                scale=alt.Scale(domain=[max_rank, 1]),
-                axis=alt.Axis(tickMinStep=1, tickCount=max_rank),
+                "net_worth:Q",
+                title="NET WORTH",
+                scale=alt.Scale(zero=False, nice=True),
+                axis=alt.Axis(format="$,.0f"),
             ),
             color=alt.Color(
                 "player:N",
                 title=None,
                 scale=alt.Scale(range=palette),
-                legend=alt.Legend(orient="bottom", columns=2),
+                legend=alt.Legend(orient="right", columns=1, labelLimit=120),
             ),
             detail="user_id:N",
             tooltip=[
                 alt.Tooltip("player:N", title="Player"),
                 alt.Tooltip("week:O", title="Week"),
-                alt.Tooltip("rank:Q", title="Place"),
                 alt.Tooltip("value_label:N", title="Net worth"),
+                alt.Tooltip("change_label:N", title="Week P/L"),
+                alt.Tooltip("rank:Q", title="Place"),
             ],
         )
-        .properties(height=285)
+        .properties(height=380)
         .configure(background="transparent")
         .configure_view(stroke="#87978c")
         .configure_axis(
@@ -2371,7 +2315,7 @@ def render_weekly_dashboard(rows: list[dict], user: dict) -> None:
             symbolStrokeWidth=4,
         )
     )
-    with st.expander("Season history · week-by-week rank", expanded=False):
+    with st.expander("Season history · net worth by week", expanded=False):
         st.altair_chart(chart, width="stretch")
 
 
