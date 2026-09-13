@@ -10,9 +10,7 @@ Tabs
 
 from __future__ import annotations
 
-import base64
 import hashlib
-import json
 import secrets
 from collections import Counter, defaultdict
 from io import BytesIO
@@ -25,7 +23,6 @@ import altair as alt
 import extra_streamlit_components as stx
 import pandas as pd
 import streamlit as st
-import streamlit.components.v1 as components
 from PIL import Image, ImageDraw, ImageFont
 from sqlalchemy.exc import IntegrityError
 
@@ -2161,68 +2158,6 @@ def build_share_card(recap: dict) -> bytes:
     return output.getvalue()
 
 
-def render_share_controls(card: bytes, recap: dict) -> None:
-    filename = f"fourth-down-week-{recap['week']}-final.png"
-    encoded = base64.b64encode(card).decode("ascii")
-    winner = str(recap["winner"]["username"])
-    share_text = json.dumps(
-        f"Fourth Down Week {recap['week']} final: {winner} wins the week."
-    )
-    components.html(
-        f"""
-        <button id="share-week" style="width:100%;height:46px;border:1px solid #07110e;background:#f2c84b;color:#07110e;font:700 12px monospace;text-transform:uppercase;cursor:pointer">Share Week {recap['week']} final</button>
-        <script>
-        const button = document.getElementById('share-week');
-        button.addEventListener('click', async () => {{
-          const raw = atob('{encoded}');
-          const bytes = new Uint8Array(raw.length);
-          for (let i = 0; i < raw.length; i++) bytes[i] = raw.charCodeAt(i);
-          const file = new File([bytes], '{filename}', {{type:'image/png'}});
-          try {{
-            if (navigator.canShare && navigator.canShare({{files:[file]}})) {{
-              await navigator.share({{title:'Fourth Down Week {recap['week']}', text:{share_text}, files:[file]}});
-            }} else {{
-              await navigator.clipboard.writeText({share_text});
-              button.textContent = 'Recap copied';
-            }}
-          }} catch (error) {{ if (error.name !== 'AbortError') button.textContent = 'Use download below'; }}
-        }});
-        </script>
-        """,
-        height=54,
-    )
-    st.download_button(
-        "Download share card",
-        data=card,
-        file_name=filename,
-        mime="image/png",
-        width="stretch",
-    )
-
-
-def render_weekly_recap(ticket_rows: list[dict], weekly_rows: list[dict]) -> None:
-    recap = build_weekly_recap(ticket_rows, weekly_rows)
-    if recap is None:
-        return
-
-    winner = recap["winner"]
-    change = money(winner["week_change"])
-    with st.expander(
-        f"Week {recap['week']} final · {winner['username']} won {fmt_money(change)}",
-        expanded=False,
-    ):
-        awards = _recap_awards(recap)
-        st.markdown(
-            "<div class='fd-recap-grid'>" + "".join(
-                f"<div class='fd-recap-item'><small>{escape(label)}</small><strong>{escape(name)}</strong><span>{escape(detail)}</span></div>"
-                for label, name, detail in awards
-            ) + "</div>",
-            unsafe_allow_html=True,
-        )
-        card = build_share_card(recap)
-        render_share_controls(card, recap)
-
-
 def render_weekly_dashboard(rows: list[dict], user: dict) -> None:
     if not rows:
         return
@@ -2395,9 +2330,7 @@ def tab_leaderboard(user: dict) -> None:
             unsafe_allow_html=True,
         )
 
-    weekly_rows = load_weekly_standings()
-    render_weekly_dashboard(weekly_rows, user)
-    render_weekly_recap(load_weekly_recap_bets(), weekly_rows)
+    render_weekly_dashboard(load_weekly_standings(), user)
 
     st.markdown(
         "<div class='section-head'><h3>Scout the league</h3><span>Every ticket is public</span></div>",
